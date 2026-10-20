@@ -1,0 +1,28 @@
+{
+  "pgsql_host": "",
+  "pgsql_port": 5432,
+  "pgsql_user": "",
+  "pgsql_password": "",
+  "pgsql_database": "anki",
+  "pgsql_schema": "public",
+  "pgsql_kanji_table": "anki_kanji",
+  "pgsql_word_table": "anki_word",
+  "pgsql_batch_job_table": "batch_job",
+  "pgsql_ssl_mode": "disable",
+  "pgsql_ssl_ca": "",
+  "pgsql_connect_timeout": 15,
+  "image_api_base": "",
+  "image_api_key": "",
+  "image_model": "",
+  "image_size": "1024x1024",
+  "image_field": "Image",
+  "skip_existing_image": true,
+  "timeout_seconds": 120,
+  "batch": {
+    "image_generate": {
+      "limit": null,
+      "job_type": "image_generate",
+      "media_dir": ""
+    }
+  }
+}
