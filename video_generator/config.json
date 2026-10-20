@@ -1,0 +1,9 @@
+﻿{
+  "base_url": "http://100.103.240.83:18610/v1",
+  "api_key": "Hoangdo@123",
+  "image_model": "muse-image-1.0",
+  "default_image_prompt": "Một chú chó Shiba Inu đội mũ phi hành gia",
+  "default_video_prompt": "Kitten walking",
+  "video_duration": 5,
+  "poll_interval": 5
+}
