@@ -4,9 +4,8 @@ from __future__ import annotations
 import argparse
 import base64
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
-from zoneinfo import ZoneInfo
 import json
+import os
 import re
 import sys
 import urllib.request
@@ -184,7 +183,7 @@ def recover_jobs(
     connection: Any,
     job_table: str,
     job_type: str,
-    task_id: str,
+    pid: int,
     limit: int | None,
 ) -> list[tuple[int, str, int]]:
     try:
@@ -210,7 +209,7 @@ def recover_jobs(
                     '"ended_at" = NULL, "response" = NULL, "result" = NULL, '
                     '"locked_by_task_id" = %s '
                     'WHERE "batch_job_id" = %s',
-                    [("processing", task_id, int(row[0])) for row in rows],
+                    [("processing", pid, int(row[0])) for row in rows],
                 )
         connection.commit()
         return [(int(row[0]), str(row[1]), int(row[2])) for row in rows]
@@ -227,12 +226,13 @@ def _eligible_source_query(
     object_type: str,
 ) -> str:
     conditions = ['COALESCE(BTRIM(source."ImagePrompt"), \'\') <> \'\'']
+    conditions.append('source."anki_note_id" IS NOT NULL')
     if skip_existing_image:
         conditions.append(f'COALESCE(BTRIM(source."{image_field}"), \'\') = \'\'')
     conditions.append(
         f'NOT EXISTS (SELECT 1 FROM {job_table} history '
         'WHERE history."job_type" = %s AND history."object_type" = %s '
-        'AND history."id" = source."id" '
+        'AND history."id" = source."anki_note_id" '
         'AND history."status" IN (\'completed\', \'processing\'))'
     )
     return " AND ".join(conditions)
@@ -275,7 +275,7 @@ def create_history_jobs(
     image_field: str,
     skip_existing_image: bool,
     limit: int | None,
-    task_id: str,
+    pid: int,
 ) -> list[tuple[int, str, int]]:
     image_field = _identifier(image_field, "ai.image.field")
     try:
@@ -301,7 +301,7 @@ def create_history_jobs(
                 query = (
                     f'INSERT INTO {job_table} '
                     '("job_type", "object_type", "id", "status", "started_at", "locked_by_task_id") '
-                    f'SELECT %s, %s, source."id", %s, CURRENT_TIMESTAMP, %s '
+                    f'SELECT %s, %s, source."anki_note_id", %s, CURRENT_TIMESTAMP, %s '
                     f'FROM {source_table} source '
                     f"WHERE {conditions} ORDER BY source.\"id\""
                 )
@@ -309,7 +309,7 @@ def create_history_jobs(
                     job_type,
                     object_type,
                     "processing",
-                    task_id,
+                    pid,
                     job_type,
                     object_type,
                 )
@@ -371,7 +371,7 @@ def process_job(
     tables: dict[str, str],
     media_dir: Path,
 ) -> tuple[str, str]:
-    job_id, object_type, row_id = job
+    job_id, object_type, note_id = job
     schema = str(config.get("pgsql_schema", "public")).strip()
     job_table = _qualified_table(
         schema,
@@ -389,14 +389,18 @@ def process_job(
         source_table = _qualified_table(schema, table)
         with connection.cursor() as cursor:
             cursor.execute(
-                f'SELECT "ImagePrompt", "{image_field}", "{source_field}" '
-                f"FROM {source_table} WHERE \"id\" = %s",
-                (row_id,),
+                f'SELECT "id", "ImagePrompt", "{image_field}", "{source_field}" '
+                f'FROM {source_table} WHERE "anki_note_id" = %s',
+                (note_id,),
             )
-            row = cursor.fetchone()
-        if row is None:
-            raise RuntimeError(f"Source row {table}.id={row_id} was not found.")
-        prompt, existing_image, source_value = row
+            rows = cursor.fetchall()
+        if not rows:
+            raise RuntimeError(f"Source row {table}.anki_note_id={note_id} was not found.")
+        if len(rows) > 1:
+            raise RuntimeError(
+                f"Multiple rows in {table} have anki_note_id={note_id}; cannot choose a source row."
+            )
+        source_id, prompt, existing_image, source_value = rows[0]
         if bool(config.get("skip_existing_image", True)) and str(existing_image or "").strip():
             _finish_job(connection, job_table, job_id, "completed", "Skipped: image already exists.")
             return "skipped", "image already exists"
@@ -404,7 +408,7 @@ def process_job(
             raise RuntimeError(f"{table}.ImagePrompt is empty.")
 
         data, extension = request_image(str(prompt).strip(), config)
-        filename = _filename(str(source_value or mode), row_id, extension)
+        filename = _filename(str(source_value or mode), source_id, extension)
         media_dir.mkdir(parents=True, exist_ok=True)
         _write_image(media_dir / filename, data)
         image_html = f'<img src="{filename}">'
@@ -412,10 +416,10 @@ def process_job(
             cursor.execute(
                 f'UPDATE {source_table} SET "{image_field}" = %s, '
                 '"updated_at" = CURRENT_TIMESTAMP WHERE "id" = %s',
-                (image_html, row_id),
+                (image_html, source_id),
             )
             if not cursor.rowcount:
-                raise RuntimeError(f"Could not update {table}.id={row_id}.")
+                raise RuntimeError(f"Could not update {table}.id={source_id}.")
         _finish_job(connection, job_table, job_id, "completed", filename)
         return "completed", filename
     except Exception as err:
@@ -460,9 +464,9 @@ def run(
             print(f"Eligible prompt notes: {eligible}")
             print(f"Notes to process this run: {total}")
             return 0
-        task_id = datetime.now(ZoneInfo("Asia/Tokyo")).strftime("%Y%m%d%H%M%S")
+        pid = os.getpid()
         if recovery:
-            jobs = recover_jobs(connection, job_table, job_type, task_id, limit)
+            jobs = recover_jobs(connection, job_table, job_type, pid, limit)
             print(f"History jobs recovered: {len(jobs)}")
         else:
             jobs = create_history_jobs(
@@ -474,7 +478,7 @@ def run(
                 image_field,
                 skip_existing_image,
                 limit,
-                task_id,
+                pid,
             )
             print(f"History jobs created: {len(jobs)}")
         print(f"Processing notes: {len(jobs)}")
