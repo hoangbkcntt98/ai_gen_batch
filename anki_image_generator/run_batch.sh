@@ -54,7 +54,26 @@ if [[ -n "$MEDIA_DIR" ]]; then
 fi
 
 if [[ "$RUN_IN_BACKGROUND" == "true" ]]; then
-  RUN_DIR="${RUN_DIR:-$SCRIPT_DIR/$(date +%Y%m%d%H%M%S)}"
+  LOG_BASE="${LOG_BASE:-$(python - "$CONFIG" "$SCRIPT_DIR" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+config_path = Path(sys.argv[1]).expanduser()
+config = json.loads(config_path.read_text(encoding="utf-8-sig"))
+configured = config.get("log_path", "")
+if not isinstance(configured, str):
+    raise SystemExit("Config log_path must be a string.")
+if configured:
+    path = Path(configured).expanduser()
+    if not path.is_absolute():
+        path = config_path.resolve().parent / path
+else:
+    path = Path(sys.argv[2])
+print(path.resolve())
+PY
+)}"
+  RUN_DIR="${RUN_DIR:-$LOG_BASE/$(date +%Y%m%d%H%M%S)}"
   LOG_FILE="${LOG_FILE:-$RUN_DIR/batch.log}"
   PID_FILE="${PID_FILE:-$RUN_DIR/batch.pid}"
   mkdir -p "$(dirname -- "$LOG_FILE")" "$(dirname -- "$PID_FILE")"

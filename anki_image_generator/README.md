@@ -20,6 +20,10 @@ on Debian/Ubuntu, install the `python3-full` package first.
 
 Set PostgreSQL and image API values in `config.json`. Set
 `batch.image_generate.media_dir` to Anki's `collection.media` directory.
+Generated image names use the existing sanitized word/kanji prefix plus
+`anki_note_id`, for example `語彙_123456.png`. Set top-level `log_path` to the
+base directory for timestamped batch log folders; relative paths resolve from
+the config file's directory.
 The script finds non-empty `ImagePrompt` values in both configured note tables,
 inserts one history row per eligible note, then generates images in the same
 run. A matching `completed` or `processing` history row prevents another
@@ -37,6 +41,14 @@ successful file names are stored in `result`; error messages are stored in
 
 The `batch_job` queue table must already exist with the documented schema.
 Manual queue inserts are not required.
+
+To rename image files for completed jobs and update their `result` values, set
+the optional top-level `path` in `config.json` to the local image directory.
+When empty, `batch.image_generate.media_dir` is used. Then run
+`python setting_image_to_notes.py`. The script records `(old_result,
+new_result)` pairs in `temp.txt` before updating the database. URL paths are
+not supported for this operation because remote file rename requires a
+service-specific API.
 
 ## Run in the background on Linux
 

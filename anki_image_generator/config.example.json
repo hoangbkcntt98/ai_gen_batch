@@ -1,0 +1,30 @@
+{
+  "pgsql_host": "localhost",
+  "pgsql_port": 5432,
+  "pgsql_user": "YOUR_POSTGRES_USER",
+  "pgsql_password": "YOUR_POSTGRES_PASSWORD",
+  "pgsql_database": "anki",
+  "pgsql_schema": "public",
+  "log_path": "batch_logs",
+  "pgsql_kanji_table": "anki_kanji",
+  "pgsql_word_table": "anki_word",
+  "pgsql_batch_job_table": "batch_jobs",
+  "path": "/path/to/collection.media",
+  "pgsql_ssl_mode": "disable",
+  "pgsql_ssl_ca": "",
+  "pgsql_connect_timeout": 15,
+  "image_api_base": "http://localhost:18610/v1",
+  "image_api_key": "YOUR_IMAGE_API_KEY",
+  "image_model": "muse-image-1.0",
+  "image_size": "1024x1024",
+  "image_field": "Image",
+  "skip_existing_image": false,
+  "timeout_seconds": 240,
+  "batch": {
+    "image_generate": {
+      "limit": null,
+      "job_type": "image_generate",
+      "media_dir": "/path/to/collection.media"
+    }
+  }
+}

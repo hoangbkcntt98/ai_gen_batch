@@ -9,7 +9,6 @@ import os
 import re
 import sys
 import urllib.request
-import uuid
 from pathlib import Path
 from typing import Any
 
@@ -356,7 +355,7 @@ def _filename(value: str, row_id: int, extension: str) -> str:
         value,
         flags=re.UNICODE,
     ).strip("_")[:30] or "item"
-    return f"{safe_value}_{row_id}_{uuid.uuid4().hex[:10]}{extension}"
+    return f"{safe_value}_{row_id}{extension}"
 
 
 def _write_image(path: Path, data: bytes) -> None:
@@ -408,7 +407,7 @@ def process_job(
             raise RuntimeError(f"{table}.ImagePrompt is empty.")
 
         data, extension = request_image(str(prompt).strip(), config)
-        filename = _filename(str(source_value or mode), source_id, extension)
+        filename = _filename(str(source_value or mode), note_id, extension)
         media_dir.mkdir(parents=True, exist_ok=True)
         _write_image(media_dir / filename, data)
         image_html = f'<img src="{filename}">'
