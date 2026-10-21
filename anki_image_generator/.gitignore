@@ -1,5 +1,10 @@
 *.log
 temp.txt
 .venv
-__pycache__
+# Config
 config.json
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
