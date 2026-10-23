@@ -27,6 +27,19 @@
       "upload_provider": "local",
       "image_base_path": "",
       "media_dir": "/path/to/collection.media"
+    },
+    "word_kanji_generate": {
+      "limit": null,
+      "overwrite_existing_fields": false,
+      "skip_fields": {
+        "word": [],
+        "kanji": []
+      },
+      "chat_api_base": "YOUR_CHAT_API_BASE",
+      "chat_api_key": "YOUR_CHAT_API_KEY",
+      "chat_model": "YOUR_CHAT_MODEL",
+      "temperature": 0.2,
+      "timeout_seconds": 120
     }
   }
 }

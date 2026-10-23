@@ -67,6 +67,28 @@ whose result says the existing image was skipped.
 The `batch_job` queue table must already exist with the documented schema.
 Manual queue inserts are not required.
 
+## Generate word and kanji note fields
+
+`word_kanji_generate.py` fills missing learning fields in both configured
+`anki_word` and `anki_kanji` tables through an OpenAI-compatible chat API. Set
+`batch.word_kanji_generate.chat_api_base`, `chat_model`, and `chat_api_key` in
+`config.json` to a chat-completions endpoint; image API settings are separate.
+The config supports a total `limit`, `overwrite_existing_fields`, per-table
+`skip_fields`, `temperature`, and `timeout_seconds`.
+
+Preview eligible rows, then run generation:
+
+```bash
+.venv/bin/python word_kanji_generate.py --dry-run
+.venv/bin/python word_kanji_generate.py --type all
+```
+
+Use `--type word` or `--type kanji` to run one table, `--limit N` to override
+the configured total limit, and `--overwrite` / `--no-overwrite` to override
+the config setting. Existing generated fields remain unchanged unless overwrite
+is enabled. A row listed by `skip_fields` is excluded when any listed field is
+non-empty.
+
 For local storage, run `python setting_image_to_notes.py` to rename completed
 image files and update their `result` values. Local directory comes from
 `batch.image_generate.image_base_path` when set, otherwise `media_dir`. The
