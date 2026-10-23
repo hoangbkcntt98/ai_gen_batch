@@ -88,6 +88,21 @@ Use `nohup .venv/bin/python -u batch_image_generate.py --limit 20 > batch.log 2>
 to cap a run. Follow logs with `tail -f batch.log`; stop with
 `kill "$(cat batch.pid)"`.
 
+To check for a running image batch every 60 seconds and start one with default
+`run_batch.sh` settings when none is active:
+
+```bash
+./batch_image_watchdog.sh start
+./batch_image_watchdog.sh status
+./batch_image_watchdog.sh stop
+```
+
+The watchdog checks immediately, then every 60 seconds by default. Set
+`WATCH_INTERVAL_SECONDS` when starting it to change the interval, for example
+`WATCH_INTERVAL_SECONDS=300 ./batch_image_watchdog.sh start` for five minutes.
+Its output goes to `batch_logs/watchdog.log`. Stopping the watchdog does not
+stop an image batch already running.
+
 ## Run in the background on Windows (PowerShell)
 
 From this folder, start the batch without keeping the terminal open:
