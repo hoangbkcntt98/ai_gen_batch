@@ -59,8 +59,10 @@ successful file names are stored in `result`; error messages are stored in
 history rows before a normal run. The `run_batch.sh` prompt can override it.
 Cleanup is skipped during `--recovery` so error rows remain available to retry.
 `run_batch.sh` also prompts `Set Images If Completed` (default `true`); it runs
-`setting_image_to_notes.py --replace-note-image` after a successful batch.
-This post-step is skipped for dry runs.
+`setting_image_to_notes.py --replace-note-image` after the batch exits, including
+when some jobs fail. This post-step is skipped for dry runs. It only processes
+completed rows for the configured image job type and ignores completed jobs
+whose result says the existing image was skipped.
 
 The `batch_job` queue table must already exist with the documented schema.
 Manual queue inserts are not required.
@@ -71,7 +73,8 @@ image files and update their `result` values. Local directory comes from
 script records `(old_result, new_result)` pairs in `temp.txt` before updating
 the database. For OCI and Drive, remote rename is unsupported; passing
 `--replace-note-image` updates note `Image` fields with an HTML `<img>` tag.
-For local storage, tag `src` uses the renamed image path. For OCI and Drive,
+For local storage, tag `src` uses the renamed image filename, as Anki expects
+for files in `collection.media`. For OCI and Drive,
 tag `src` uses the stored remote URL; OCI filename-only `result` values are
 combined with `image_base_path`, while existing full URLs remain unchanged.
 

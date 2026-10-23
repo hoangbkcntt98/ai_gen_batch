@@ -110,9 +110,19 @@ def run(
         with connection.cursor() as cursor:
             cursor.execute(
                 f'SELECT "batch_job_id", "id", "result", "object_type" FROM {table} '
-                'WHERE "status" = %s AND "result" IS NOT NULL AND BTRIM("result") <> \'\' '
+                'WHERE "status" = %s AND "job_type" = %s '
+                'AND "result" IS NOT NULL AND BTRIM("result") <> \'\' '
+                'AND "result" NOT LIKE %s '
                 'ORDER BY "batch_job_id" FOR UPDATE',
-                ("completed",),
+                (
+                    "completed",
+                    str(
+                        config.get("batch", {})
+                        .get("image_generate", {})
+                        .get("job_type", "image_generate")
+                    ).strip(),
+                    "Skipped:%",
+                ),
             )
             rows = cursor.fetchall()
 
@@ -228,7 +238,9 @@ def run(
                     cursor.execute(
                         f'UPDATE {source_table} SET "{image_field}" = %s '
                         'WHERE "anki_note_id" = %s',
-                        (_image_tag(str(directory / new_name)), record_id),
+                        # Anki resolves local images from collection.media by filename,
+                        # not by the host filesystem's absolute path.
+                        (_image_tag(new_name), record_id),
                     )
                     if cursor.rowcount != 1:
                         raise RuntimeError(
