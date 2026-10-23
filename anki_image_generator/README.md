@@ -19,7 +19,24 @@ environment after creating it with `py -m venv .venv`. If `venv` is unavailable
 on Debian/Ubuntu, install the `python3-full` package first.
 
 Set PostgreSQL and image API values in `config.json`. Set
-`batch.image_generate.media_dir` to Anki's `collection.media` directory.
+`batch.image_generate.media_dir` to Anki's `collection.media` directory for
+local storage. `batch.image_generate.upload_provider` supports `local` (default),
+`oci`, and `drive`. Local uploads save generated images in `media_dir`.
+For OCI, set `batch.image_generate.image_base_path` to an Object Storage
+pre-authenticated request URL with object-create permission. For Google Drive,
+set it to the destination folder ID and place OAuth Desktop client credentials
+in `client.json` beside `config.json`. First Drive run opens Google OAuth flow
+and saves refresh credentials to `token.json`; keep both files private.
+Drive uploads receive public reader permission so Anki can load their image URLs.
+Remote providers store full image URLs in `batch_jobs.result`; note `Image`
+fields embed those URLs. Normal remote generation does not write to `media_dir`.
+`run_batch.sh` starts with two task options: `1) anki_image_generate` runs the
+normal batch, and `2) upload media_dir images to OCI` copies existing `.png`,
+`.jpg`, `.jpeg`, `.webp`, `.gif`, or `.bmp` files from `media_dir` to the
+configured OCI request URL immediately, without config prompts or image
+generation. Option 2 uses default `config.json`; set `CONFIG` or `MEDIA_DIR`
+environment variables to override paths. It needs `upload_provider: "oci"` and
+uses `image_base_path`.
 Generated image names use the existing sanitized word/kanji prefix plus
 `anki_note_id`, for example `語彙_123456.png`. Set top-level `log_path` to the
 base directory for timestamped batch log folders; relative paths resolve from
@@ -38,17 +55,25 @@ before updating it. New and recovered jobs receive a
 `locked_by_task_id` stores Python process PID. Job outcomes and
 successful file names are stored in `result`; error messages are stored in
 `response`.
+`batch.image_generate.clean_error` defaults to `true` and deletes all `error`
+history rows before a normal run. The `run_batch.sh` prompt can override it.
+Cleanup is skipped during `--recovery` so error rows remain available to retry.
+`run_batch.sh` also prompts `Set Images If Completed` (default `true`); it runs
+`setting_image_to_notes.py --replace-note-image` after a successful batch.
+This post-step is skipped for dry runs.
 
 The `batch_job` queue table must already exist with the documented schema.
 Manual queue inserts are not required.
 
-To rename image files for completed jobs and update their `result` values, set
-the optional top-level `path` in `config.json` to the local image directory.
-When empty, `batch.image_generate.media_dir` is used. Then run
-`python setting_image_to_notes.py`. The script records `(old_result,
-new_result)` pairs in `temp.txt` before updating the database. URL paths are
-not supported for this operation because remote file rename requires a
-service-specific API.
+For local storage, run `python setting_image_to_notes.py` to rename completed
+image files and update their `result` values. Local directory comes from
+`batch.image_generate.image_base_path` when set, otherwise `media_dir`. The
+script records `(old_result, new_result)` pairs in `temp.txt` before updating
+the database. For OCI and Drive, remote rename is unsupported; passing
+`--replace-note-image` updates note `Image` fields with an HTML `<img>` tag.
+For local storage, tag `src` uses the renamed image path. For OCI and Drive,
+tag `src` uses the stored remote URL; OCI filename-only `result` values are
+combined with `image_base_path`, while existing full URLs remain unchanged.
 
 ## Run in the background on Linux
 

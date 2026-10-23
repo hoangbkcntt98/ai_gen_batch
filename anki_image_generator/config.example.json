@@ -9,7 +9,6 @@
   "pgsql_kanji_table": "anki_kanji",
   "pgsql_word_table": "anki_word",
   "pgsql_batch_job_table": "batch_jobs",
-  "path": "/path/to/collection.media",
   "pgsql_ssl_mode": "disable",
   "pgsql_ssl_ca": "",
   "pgsql_connect_timeout": 15,
@@ -24,6 +23,9 @@
     "image_generate": {
       "limit": null,
       "job_type": "image_generate",
+      "clean_error": true,
+      "upload_provider": "local",
+      "image_base_path": "",
       "media_dir": "/path/to/collection.media"
     }
   }

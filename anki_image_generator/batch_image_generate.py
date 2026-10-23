@@ -4,10 +4,14 @@ from __future__ import annotations
 import argparse
 import base64
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from html import escape
 import json
+import mimetypes
 import os
 import re
 import sys
+import threading
+from urllib.parse import quote
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -19,6 +23,11 @@ except ImportError:
 
 _IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,62}")
 _DEFAULT_TABLES = {"kanji": "anki_kanji", "word": "anki_word"}
+_DRIVE_AUTH_LOCK = threading.Lock()
+
+
+def _image_tag(location: str) -> str:
+    return f'<img src="{escape(location, quote=True)}">'
 
 
 def _identifier(value: Any, label: str) -> str:
@@ -216,6 +225,20 @@ def recover_jobs(
         connection.rollback()
         raise
 
+def clean_error_jobs(connection: Any, job_table: str) -> int:
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f'DELETE FROM {job_table} WHERE "status" = %s',
+                ("error",),
+            )
+            deleted = int(cursor.rowcount)
+        connection.commit()
+        return deleted
+    except Exception:
+        connection.rollback()
+        raise
+
 def _eligible_source_query(
     source_table: str,
     job_table: str,
@@ -364,11 +387,114 @@ def _write_image(path: Path, data: bytes) -> None:
     temporary.replace(path)
 
 
+def _image_provider(config: dict[str, Any]) -> tuple[str, str]:
+    batch_config = config.get("batch", {}).get("image_generate", {})
+    provider = str(batch_config.get("upload_provider", "local")).strip().lower()
+    if provider not in {"local", "oci", "drive"}:
+        raise ValueError(
+            "batch.image_generate.upload_provider must be local, oci, or drive."
+        )
+    base_path = str(batch_config.get("image_base_path", "")).strip()
+    if provider != "local" and not base_path:
+        raise ValueError(
+            f"batch.image_generate.image_base_path is required for {provider}."
+        )
+    return provider, base_path
+
+
+def _upload_oci(base_url: str, filename: str, data: bytes, timeout: int) -> str:
+    try:
+        import requests
+    except ImportError as err:
+        raise RuntimeError(
+            "Missing requests. Install standalone dependencies with "
+            "`python -m pip install -r requirements.txt`."
+        ) from err
+    url = f"{base_url.rstrip('/')}/{quote(filename)}"
+    response = requests.put(url, data=data, timeout=timeout)
+    if response.status_code not in {200, 201}:
+        raise RuntimeError(
+            f"OCI upload failed: HTTP {response.status_code}: {response.text[:1000]}"
+        )
+    return url
+
+
+def _upload_drive(
+    folder_id: str, filename: str, data: bytes, config_path: Path, timeout: int
+) -> str:
+    try:
+        from google.auth.transport.requests import Request
+        from google.oauth2.credentials import Credentials
+        from google_auth_oauthlib.flow import InstalledAppFlow
+        from googleapiclient.discovery import build
+        from googleapiclient.http import MediaIoBaseUpload
+    except ImportError as err:
+        raise RuntimeError(
+            "Missing Google Drive dependencies. Install standalone dependencies with "
+            "`python -m pip install -r requirements.txt`."
+        ) from err
+    import io
+
+    client_path = config_path.resolve().parent / "client.json"
+    token_path = config_path.resolve().parent / "token.json"
+    if not client_path.is_file():
+        raise RuntimeError(f"Google Drive OAuth file not found: {client_path}")
+    scopes = ["https://www.googleapis.com/auth/drive"]
+    with _DRIVE_AUTH_LOCK:
+        credentials = (
+            Credentials.from_authorized_user_file(str(token_path), scopes)
+            if token_path.is_file()
+            else None
+        )
+        if credentials and credentials.expired and credentials.refresh_token:
+            credentials.refresh(Request())
+        if not credentials or not credentials.valid:
+            flow = InstalledAppFlow.from_client_secrets_file(str(client_path), scopes)
+            credentials = flow.run_local_server(port=0, timeout_seconds=timeout)
+            token_path.write_text(credentials.to_json(), encoding="utf-8")
+
+    service = build("drive", "v3", credentials=credentials, cache_discovery=False)
+    uploaded = service.files().create(
+        body={"name": filename, "parents": [folder_id]},
+        media_body=MediaIoBaseUpload(
+            io.BytesIO(data),
+            mimetype=mimetypes.guess_type(filename)[0] or "application/octet-stream",
+        ),
+        fields="id",
+    ).execute()
+    file_id = uploaded["id"]
+    service.permissions().create(
+        fileId=file_id,
+        body={"type": "anyone", "role": "reader"},
+    ).execute()
+    return f"https://drive.google.com/uc?export=view&id={quote(file_id)}"
+
+
+def _store_image(
+    provider: str,
+    image_base_path: str,
+    filename: str,
+    data: bytes,
+    media_dir: Path,
+    config_path: Path,
+    config: dict[str, Any],
+) -> str:
+    if provider == "local":
+        media_dir.mkdir(parents=True, exist_ok=True)
+        _write_image(media_dir / filename, data)
+        return filename
+    timeout = int(config.get("timeout_seconds", 120))
+    if provider == "oci":
+        return _upload_oci(image_base_path, filename, data, timeout)
+    return _upload_drive(image_base_path, filename, data, config_path, timeout)
+
+
 def process_job(
     job: tuple[int, str, int],
     config: dict[str, Any],
     tables: dict[str, str],
     media_dir: Path,
+    config_path: Path,
 ) -> tuple[str, str]:
     job_id, object_type, note_id = job
     schema = str(config.get("pgsql_schema", "public")).strip()
@@ -406,11 +532,13 @@ def process_job(
         if not str(prompt or "").strip():
             raise RuntimeError(f"{table}.ImagePrompt is empty.")
 
+        provider, image_base_path = _image_provider(config)
         data, extension = request_image(str(prompt).strip(), config)
         filename = _filename(str(source_value or mode), note_id, extension)
-        media_dir.mkdir(parents=True, exist_ok=True)
-        _write_image(media_dir / filename, data)
-        image_html = f'<img src="{filename}">'
+        image_location = _store_image(
+            provider, image_base_path, filename, data, media_dir, config_path, config
+        )
+        image_html = _image_tag(image_location)
         with connection.cursor() as cursor:
             cursor.execute(
                 f'UPDATE {source_table} SET "{image_field}" = %s, '
@@ -419,8 +547,8 @@ def process_job(
             )
             if not cursor.rowcount:
                 raise RuntimeError(f"Could not update {table}.id={source_id}.")
-        _finish_job(connection, job_table, job_id, "completed", filename)
-        return "completed", filename
+        _finish_job(connection, job_table, job_id, "completed", image_location)
+        return "completed", image_location
     except Exception as err:
         connection.rollback()
         _finish_job(connection, job_table, job_id, "error", str(err))
@@ -436,6 +564,8 @@ def run(
     dry_run: bool = False,
     step: int = 1,
     recovery: bool = False,
+    clean_error: bool = True,
+    config_path: Path | None = None,
 ) -> int:
     schema = _identifier(config.get("pgsql_schema", "public"), "pgsql.schema")
     tables = table_names(config)
@@ -445,6 +575,7 @@ def run(
     job_type = str(config.get("image_batch_job_type", "image_generate")).strip()
     if not job_type:
         raise ValueError("batch.image_generate.job_type must not be empty.")
+    _image_provider(config)
     connection = connect_pgsql(config)
     try:
         image_field = _identifier(config.get("image_field", "Image"), "ai.image.field")
@@ -463,6 +594,11 @@ def run(
             print(f"Eligible prompt notes: {eligible}")
             print(f"Notes to process this run: {total}")
             return 0
+        if clean_error and not recovery:
+            deleted = clean_error_jobs(connection, job_table)
+            print(f"Error history rows deleted: {deleted}")
+        elif clean_error and recovery:
+            print("Error cleanup skipped during recovery mode.")
         pid = os.getpid()
         if recovery:
             jobs = recover_jobs(connection, job_table, job_type, pid, limit)
@@ -486,7 +622,14 @@ def run(
         succeeded = skipped = errors = 0
         with ThreadPoolExecutor(max_workers=step) as executor:
             futures = {
-                executor.submit(process_job, job, config, tables, media_dir): job
+                executor.submit(
+                    process_job,
+                    job,
+                    config,
+                    tables,
+                    media_dir,
+                    config_path or Path(__file__).resolve().with_name("config.json"),
+                ): job
                 for job in jobs
             }
             results = {
@@ -518,6 +661,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--limit", type=int, help="Override batch.image_generate.limit.")
     parser.add_argument("--step", type=int, default=1, help="Run this many jobs concurrently.")
     parser.add_argument("--recovery", action="store_true", help="Retry eligible error jobs.")
+    clean_group = parser.add_mutually_exclusive_group()
+    clean_group.add_argument(
+        "--clean-error",
+        dest="clean_error",
+        action="store_true",
+        help="Delete all error history rows before a normal run.",
+    )
+    clean_group.add_argument(
+        "--no-clean-error",
+        dest="clean_error",
+        action="store_false",
+        help="Keep error history rows.",
+    )
+    parser.set_defaults(clean_error=None)
     parser.add_argument("--media-dir", type=Path, help="Override Anki collection.media directory.")
     parser.add_argument("--dry-run", action="store_true", help="Count eligible prompt notes without changing data.")
     args = parser.parse_args(argv)
@@ -528,14 +685,20 @@ def main(argv: list[str] | None = None) -> int:
         config = raw_config
         batch_config = config.get("batch", {}).get("image_generate", {})
         limit = effective_limit(batch_config.get("limit"), args.limit)
+        clean_error = args.clean_error
+        if clean_error is None:
+            clean_error = batch_config.get("clean_error", True)
+        if not isinstance(clean_error, bool):
+            raise ValueError("batch.image_generate.clean_error must be true or false.")
         if args.step < 1:
             raise ValueError("--step must be a positive integer.")
+        provider, _image_base_path = _image_provider(config)
         configured_media_dir = str(batch_config.get("media_dir", "")).strip()
         media_value = args.media_dir or (
             Path(configured_media_dir) if configured_media_dir else None
         )
         if media_value is None:
-            if args.dry_run:
+            if args.dry_run or provider != "local":
                 media_value = Path.cwd()
             else:
                 raise ValueError(
@@ -546,7 +709,16 @@ def main(argv: list[str] | None = None) -> int:
         if not media_dir.is_absolute():
             media_dir = (args.config.resolve().parent / media_dir).resolve()
         config["image_batch_job_type"] = batch_config.get("job_type", "image_generate")
-        return run(config, limit, media_dir, args.dry_run, args.step, args.recovery)
+        return run(
+            config,
+            limit,
+            media_dir,
+            args.dry_run,
+            args.step,
+            args.recovery,
+            clean_error,
+            args.config,
+        )
     except Exception as err:
         print(f"Error: {err}", file=sys.stderr)
         return 1
