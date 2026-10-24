@@ -149,8 +149,14 @@ def create_notes(
             )
             identity_field = "Word" if identity == "word" else "Kanji"
             identity_value = draft.fields.get(identity_field, "").strip()
-            if connector.has_note_field_value(
+            is_duplicate = connector.has_note_field_value(
                 note_type, identity_field, identity_value
+            )
+            stored_identity = (
+                f"{identity_value} ({deck})" if is_duplicate else identity_value
+            )
+            if is_duplicate and connector.has_note_field_value(
+                note_type, identity_field, stored_identity
             ):
                 result.skipped += 1
                 print(f"SKIP duplicate: {sheet} row {row_number}")
@@ -158,7 +164,8 @@ def create_notes(
             if dry_run:
                 print(
                     f"DRY-RUN {sheet} row {row_number}: "
-                    f"deck={deck!r} model={note_type!r} fields={len(draft.fields)}"
+                    f"deck={deck!r} model={note_type!r} "
+                    f"{identity_field}={stored_identity!r} fields={len(draft.fields)}"
                 )
                 continue
 
@@ -168,6 +175,8 @@ def create_notes(
                 model_fields,
                 allow_new_examples=True,
             )
+            # Keep canonical identity in generator input; add deck suffix only to Anki note.
+            draft.fields[identity_field] = stored_identity
             note_id = connector.add_note(
                 draft.deck, draft.note_type, draft.fields, draft.tags
             )
