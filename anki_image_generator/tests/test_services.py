@@ -13,7 +13,12 @@ from services.google_services import GoogleSheetsService
 from services.image_generator import ImageGenerator, _filename, request_image
 from services.job_manager import JobManager, _identifier, table_for_object_type
 from services.tts_generator import TTSGenerator
-from services.word_generator import WordGenerator, build_image_prompt, generation_plan
+from services.word_generator import (
+    WordGenerator,
+    build_image_prompt,
+    generate_missing_fields,
+    generation_plan,
+)
 from spreadsheet_anki_creator import (
     _dict_rows,
     _note_fields,
@@ -83,7 +88,9 @@ class TestImageGenerator(unittest.TestCase):
         ).encode()
         with patch("services.image_generator.urllib.request.urlopen", return_value=response):
             data, extension = request_image(
-                "prompt", {"image_model": "model", "image_api_base": "http://test"}
+                "prompt", {"services": {"image_generator": {
+                    "image_model": "model", "image_api_base": "http://test"
+                }}}
             )
         self.assertEqual(data, png)
         self.assertEqual(extension, ".png")
@@ -110,7 +117,7 @@ class TestTTSGenerator(unittest.TestCase):
         post = MagicMock(return_value=response)
         stored = {}
         generator = TTSGenerator(
-            {"batch": {"tts": {"api_base": "http://tts/v1", "model": "voice"}}},
+            {"services": {"tts_generator": {"api_base": "http://tts/v1", "model": "voice"}}},
             request_post=post,
         )
 
@@ -148,7 +155,7 @@ class TestWordGenerator(unittest.TestCase):
         }
         with patch("services.word_generator.requests.post", return_value=response):
             fields = WordGenerator(
-                {"batch": {"word_kanji_generate": {
+                {"services": {"word_generator": {
                     "chat_api_base": "http://chat/v1", "chat_model": "test"
                 }}}
             ).generate_missing_fields(
@@ -156,6 +163,73 @@ class TestWordGenerator(unittest.TestCase):
                 ["Reading", "MeaningDestination"],
             )
         self.assertEqual(fields, {"Reading": "あて", "MeaningDestination": "to guess"})
+
+    def test_missing_reading_triggers_full_word_schema_generation(self):
+        fields = {
+            "Word": "渋々",
+            "Reading": "",
+            "MeaningSource": "",
+            "MeaningDestination": "reluctantly",
+            "Example1_Source": "",
+            "Example1_Destination": "",
+            "ImagePrompt": "",
+        }
+        model_fields = list(fields)
+        response = {
+            "Word": "渋々",
+            "Reading": "しぶしぶ",
+            "MeaningSource": "unwillingly",
+            "MeaningDestination": "reluctantly",
+            "Usage": "",
+            "Example1_Source": "彼は渋々同意した。",
+            "Example1_Destination": "He reluctantly agreed.",
+            "ImagePrompt": "",
+            "Notes": "",
+            "Chineses": "",
+        }
+        with patch("services.word_generator._call_json_api", return_value=response) as call:
+            generate_missing_fields(
+                {"Word": "渋々"},
+                fields,
+                model_fields,
+                {"user_level": "invalid", "batch": {}},
+            )
+
+        prompt = call.call_args.args[0]
+        self.assertIn('"user_level": "N3"', prompt)
+        self.assertEqual(fields["MeaningSource"], "unwillingly")
+        self.assertEqual(fields["MeaningDestination"], "reluctantly")
+        self.assertEqual(fields["ImagePrompt"], build_image_prompt("渋々", "reluctantly"))
+
+    def test_missing_meaning_jp_triggers_full_kanji_schema(self):
+        fields = {
+            "Kanji": "生",
+            "MeaningJP": "",
+            "RequiredVocabulary": "",
+            "Vocabulary1_JP": "",
+            "Vocabulary1_VN": "",
+        }
+        response = {
+            "Kanji": "生",
+            "MeaningJP": "いきる",
+            "MeaningVI": "sống",
+            "RequiredVocabulary": "生きる",
+            "Vocabulary1_JP": "生きる（いきる）",
+            "Vocabulary1_VN": "sống",
+        }
+        with patch("services.word_generator._call_json_api", return_value=response) as call:
+            generate_missing_fields(
+                {"Kanji": "生", "RequiredVocabulary": "生きる"},
+                fields,
+                list(fields),
+                {"services": {}},
+            )
+
+        prompt = call.call_args.args[0]
+        self.assertIn('"required_vocabulary": "生きる"', prompt)
+        self.assertEqual(fields["RequiredVocabulary"], "生きる")
+        self.assertEqual(fields["Vocabulary1_JP"], "生きる（いきる）")
+        self.assertNotIn("ImagePrompt", fields)
 
 
 class TestSpreadsheetCreator(unittest.TestCase):
@@ -186,7 +260,7 @@ class TestSpreadsheetCreator(unittest.TestCase):
         connector.add_note.return_value = 123
         config = {
             "anki_import": {"note_types": {"word": "WordModel"}},
-            "batch": {"image_generate": {"media_dir": ""}},
+            "services": {"image_generator": {"media_dir": ""}},
         }
         rows = [("Sheet1", 2, {"Word": "あて", "Tags": "anki;Deck"})]
 

@@ -34,18 +34,19 @@ def _image_tag(location: str) -> str:
     return f'<img src="{escape(location, quote=True)}">'
 
 def request_image(prompt: str, config: dict[str, Any]) -> tuple[bytes, str]:
-    model = str(config.get("image_model", "")).strip()
+    settings = config.get("services", {}).get("image_generator", {})
+    model = str(settings.get("image_model", config.get("image_model", ""))).strip()
     if not model:
         raise RuntimeError("Missing ai.image.model.")
-    base = str(config.get("image_api_base", "")).strip().rstrip("/")
-    api_key = str(config.get("image_api_key", "")).strip()
+    base = str(settings.get("image_api_base", config.get("image_api_base", ""))).strip().rstrip("/")
+    api_key = str(settings.get("image_api_key", config.get("image_api_key", ""))).strip()
     if not base:
         raise RuntimeError("Missing ai.image.api_base.")
-    timeout = int(config.get("timeout_seconds", 120))
+    timeout = int(settings.get("timeout_seconds", config.get("timeout_seconds", 120)))
     payload = {
         "model": model,
         "prompt": prompt,
-        "size": str(config.get("image_size", "1024x1024")),
+        "size": str(settings.get("image_size", config.get("image_size", "1024x1024"))),
         "n": 1,
         "response_format": "b64_json",
     }
@@ -97,16 +98,18 @@ def _write_image(path: Path, data: bytes) -> None:
 
 
 def _image_provider(config: dict[str, Any]) -> tuple[str, str]:
-    batch_config = config.get("batch", {}).get("image_generate", {})
+    batch_config = config.get("services", {}).get(
+        "image_generator", config.get("batch", {}).get("image_generate", {})
+    )
     provider = str(batch_config.get("upload_provider", "local")).strip().lower()
     if provider not in {"local", "oci", "drive"}:
         raise ValueError(
-            "batch.image_generate.upload_provider must be local, oci, or drive."
+            "services.image_generator.upload_provider must be local, oci, or drive."
         )
     base_path = str(batch_config.get("image_base_path", "")).strip()
     if provider != "local" and not base_path:
         raise ValueError(
-            f"batch.image_generate.image_base_path is required for {provider}."
+            f"services.image_generator.image_base_path is required for {provider}."
         )
     return provider, base_path
 
@@ -316,9 +319,12 @@ def run(
 ) -> int:
     job_manager = JobManager(config)
     tables = job_manager.tables
-    job_type = str(config.get("image_batch_job_type", "image_generate")).strip()
+    image_config = config.get("services", {}).get(
+        "image_generator", config.get("batch", {}).get("image_generate", {})
+    )
+    job_type = str(image_config.get("job_type", config.get("image_batch_job_type", "image_generate"))).strip()
     if not job_type:
-        raise ValueError("batch.image_generate.job_type must not be empty.")
+        raise ValueError("services.image_generator.job_type must not be empty.")
     _image_provider(config)
     connection = job_manager.connect()
     try:

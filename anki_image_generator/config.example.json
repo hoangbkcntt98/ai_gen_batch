@@ -12,15 +12,15 @@
   "pgsql_ssl_mode": "disable",
   "pgsql_ssl_ca": "",
   "pgsql_connect_timeout": 15,
-  "image_api_base": "http://localhost:18610/v1",
-  "image_api_key": "YOUR_IMAGE_API_KEY",
-  "image_model": "muse-image-1.0",
-  "image_size": "1024x1024",
   "image_field": "Image",
   "skip_existing_image": false,
   "timeout_seconds": 240,
-  "batch": {
-    "image_generate": {
+  "services": {
+    "image_generator": {
+      "image_api_base": "http://localhost:18610/v1",
+      "image_api_key": "YOUR_IMAGE_API_KEY",
+      "image_model": "muse-image-1.0",
+      "image_size": "1024x1024",
       "limit": null,
       "job_type": "image_generate",
       "clean_error": true,
@@ -28,7 +28,7 @@
       "image_base_path": "",
       "media_dir": "/path/to/collection.media"
     },
-    "word_kanji_generate": {
+    "word_generator": {
       "limit": null,
       "overwrite_existing_fields": false,
       "skip_fields": {
@@ -41,7 +41,7 @@
       "temperature": 0.2,
       "timeout_seconds": 120
     },
-    "tts": {
+    "tts_generator": {
       "api_base": "YOUR_TTS_API_BASE",
       "api_key": "YOUR_TTS_API_KEY",
       "model": "edge-tts/ja-JP-KeitaNeural",

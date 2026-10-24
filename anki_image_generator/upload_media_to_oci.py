@@ -12,19 +12,21 @@ IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
 
 
 def upload_media(config: dict, config_path: Path, media_override: Path | None) -> int:
-    batch_config = config.get("batch", {}).get("image_generate", {})
+    batch_config = config.get("services", {}).get(
+        "image_generator", config.get("batch", {}).get("image_generate", {})
+    )
     if str(batch_config.get("upload_provider", "local")).strip().lower() != "oci":
-        raise ValueError("batch.image_generate.upload_provider must be oci.")
+        raise ValueError("services.image_generator.upload_provider must be oci.")
     base_url = str(batch_config.get("image_base_path", "")).strip()
     if not base_url.startswith(("https://", "http://")):
         raise ValueError(
-            "batch.image_generate.image_base_path must be an OCI pre-authenticated request URL."
+            "services.image_generator.image_base_path must be an OCI pre-authenticated request URL."
         )
 
     configured_dir = str(batch_config.get("media_dir", "")).strip()
     directory = media_override or (Path(configured_dir) if configured_dir else None)
     if directory is None:
-        raise ValueError("Set batch.image_generate.media_dir or pass --media-dir.")
+        raise ValueError("Set services.image_generator.media_dir or pass --media-dir.")
     directory = directory.expanduser()
     if not directory.is_absolute():
         directory = (config_path.resolve().parent / directory).resolve()
@@ -69,7 +71,7 @@ def upload_media(config: dict, config_path: Path, media_override: Path | None) -
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=Path(__file__).with_name("config.json"))
-    parser.add_argument("--media-dir", type=Path, help="Override batch.image_generate.media_dir.")
+    parser.add_argument("--media-dir", type=Path, help="Override services.image_generator.media_dir.")
     args = parser.parse_args(argv)
     try:
         config = json.loads(args.config.read_text(encoding="utf-8-sig"))

@@ -38,13 +38,15 @@ class TTSGenerator:
         self.request_post = request_post
 
     def synthesize(self, text: str) -> bytes:
-        settings = self.config.get("batch", {}).get("tts", {})
+        settings = self.config.get("services", {}).get(
+            "tts_generator", self.config.get("batch", {}).get("tts", {})
+        )
         base = str(settings.get("api_base", "")).strip().rstrip("/")
         model = str(settings.get("model", "")).strip()
         api_key = str(settings.get("api_key", "")).strip()
         if not base or not model:
             raise RuntimeError(
-                "Configure batch.tts.api_base and batch.tts.model in config.json."
+                "Configure services.tts_generator.api_base and model in config.json."
             )
         headers = {"Content-Type": "application/json"}
         if api_key:

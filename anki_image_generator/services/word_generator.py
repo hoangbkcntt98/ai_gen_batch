@@ -30,8 +30,166 @@ KANJI_CHAT_FIELDS = {
     *(f"Vocabulary{index}_{language}" for index in range(1, 7) for language in ("JP", "VN")),
 }
 
+WORD_SCHEMA = (
+    "Word", "Reading", "MeaningSource", "MeaningDestination", "Usage",
+    *(f"Example{index}_{language}" for index in range(1, 7) for language in ("Source", "Destination")),
+    "ImagePrompt", "Notes", "Chineses",
+)
+KANJI_SCHEMA = (
+    "Kanji", "RequiredVocabulary", "MeaningJP", "MeaningVI", "Chinese", "OnYomi", "KunYomi",
+    "Radical", "RadicalName", "RadicalMeaning", "PhoneticPart",
+    *(f"Vocabulary{index}_{language}" for index in range(1, 7) for language in ("JP", "VN")),
+    *(f"Example{index}_{language}" for index in range(1, 7) for language in ("JP", "VN")),
+    "Mnemonic", "ImagePrompt", "RelatedKanji", "Notes",
+)
+
+
+def _call_json_api(prompt: str, config: dict[str, Any]) -> dict[str, Any]:
+    batch_config = config.get("services", {}).get(
+        "word_generator", config.get("batch", {}).get("word_kanji_generate", {})
+    )
+    base = str(batch_config.get("chat_api_base", config.get("chat_api_base", ""))).strip().rstrip("/")
+    model = str(batch_config.get("chat_model", config.get("chat_model", ""))).strip()
+    api_key = str(batch_config.get("chat_api_key", config.get("chat_api_key", ""))).strip()
+    if not base or not model:
+        raise RuntimeError(
+            "Configure services.word_generator.chat_api_base and chat_model in config.json."
+        )
+    payload = {
+        "model": model,
+        "messages": [
+            {
+                "role": "system",
+                "content": "Return only one valid JSON object. Use string values only. Do not return Markdown or text outside JSON.",
+            },
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": float(batch_config.get("temperature", 0.2)),
+        "response_format": {"type": "json_object"},
+    }
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    timeout = int(batch_config.get("timeout_seconds", config.get("timeout_seconds", 120)))
+    response = requests.post(
+        base + "/chat/completions", json=payload, headers=headers, timeout=timeout
+    )
+    if response.status_code in (400, 422) and "response_format" in response.text:
+        payload.pop("response_format", None)
+        response = requests.post(
+            base + "/chat/completions", json=payload, headers=headers, timeout=timeout
+        )
+    response.raise_for_status()
+    content = response.json()["choices"][0]["message"]["content"]
+    if isinstance(content, list):
+        content = "".join(
+            str(item.get("text", "")) for item in content if isinstance(item, dict)
+        )
+    generated_text = re.sub(
+        r"^```(?:json)?\s*|\s*```$", "", str(content).strip(), flags=re.I
+    )
+    generated = json.loads(generated_text)
+    if not isinstance(generated, dict):
+        raise RuntimeError("Chat API response must be a JSON object.")
+    return generated
+
+
+def _generate_schema_fields(
+    identity: str,
+    row: dict[str, str],
+    fields: dict[str, str],
+    model_fields: list[str],
+    config: dict[str, Any],
+) -> None:
+    schema = WORD_SCHEMA if identity == "Word" else KANJI_SCHEMA
+    value = row.get(identity, "").strip()
+    source_language = str(config.get("source_language", "Japanese")).strip() or "Japanese"
+    destination_language = (
+        str(config.get("destination_language", "Vietnamese")).strip() or "Vietnamese"
+    )
+    user_level = str(config.get("user_level", "N3")).strip().upper()
+    if user_level not in {"N1", "N2", "N3", "N4", "N5"}:
+        user_level = "N3"
+    required_vocabulary = (
+        fields.get("RequiredVocabulary", "").strip()
+        or row.get("RequiredVocabulary", "").strip()
+    )
+    output_schema = {name: "" for name in schema}
+    input_data = {
+        "mode": identity.lower(),
+        "value": value,
+        "source_language": source_language,
+        "destination_language": destination_language,
+        "user_level": user_level,
+        "required_vocabulary": required_vocabulary if identity == "Kanji" else "",
+    }
+    prompt = (
+        "Bạn tạo dữ liệu Anki cho người học ngoại ngữ. Đọc INPUT, xử lý theo MODE, "
+        "rồi chỉ trả về đúng một JSON object hợp lệ. Không trả Markdown, lời dẫn, "
+        "hoặc nội dung ngoài JSON. Mọi giá trị phải là chuỗi; field không dùng hoặc "
+        "không có dữ liệu thì để \"\".\n\n"
+        f"INPUT\n{json.dumps(input_data, ensure_ascii=False)}\n\n"
+        "Quy tắc chung:\n"
+        "- Nếu user_level không thuộc N1, N2, N3, N4, N5, dùng N3.\n"
+        "- Chỉ dùng field thuộc schema tương ứng với mode. Không thêm key.\n"
+        "- Luôn trả đủ mọi key trong schema; field không áp dụng thì ghi \"\".\n"
+        "- Nội dung chính xác, tự nhiên, phù hợp user_level. Không bịa từ nguyên hoặc thông tin không chắc chắn.\n"
+    )
+    if identity == "Word":
+        prompt += (
+            f"\nMODE word: Phân tích value như từ/cụm từ trong {source_language}. "
+            f"MeaningSource và Example*_Source dùng {source_language}; "
+            f"MeaningDestination và Example*_Destination dùng {destination_language}. "
+            "Tạo 1-6 cặp ví dụ tự nhiên, phù hợp user_level, bao quát nghĩa phổ biến; "
+            "field ví dụ không dùng để trống. Reading dùng cách đọc phù hợp source_language; "
+            "với tiếng Nhật dùng hiragana. Usage mô tả ngắn cách dùng, sắc thái hoặc kết hợp từ; "
+            "có thể dùng HTML đơn giản. Chỉ điền Chineses khi source_language là Japanese, "
+            "destination_language là Vietnamese và từ có Hán tự; ghi âm Hán Việt IN HOA, "
+            "trường hợp khác để trống. Ghi value nguyên dạng vào Word. "
+            "ImagePrompt không tạo ở lượt này, luôn trả ImagePrompt là chuỗi rỗng.\n"
+            f"Schema word: {json.dumps(output_schema, ensure_ascii=False)}"
+        )
+    else:
+        prompt += (
+            "\nMODE kanji: Phân tích đúng một chữ Kanji trong value. Tạo số từ vựng tối thiểu "
+            "để đại diện cách đọc On/Kun thông dụng, tối đa 6 cặp. Nếu required_vocabulary "
+            "không rỗng, ghi chính xác từ đó vào Vocabulary1_JP, kèm cách đọc trong ngoặc "
+            "và nghĩa tiếng Việt ở Vocabulary1_VN; không thay bằng từ khác. Ví dụ dùng từ vựng "
+            "đã chọn, phù hợp user_level; chỉ tạo số cặp cần thiết, tối đa 6; field không dùng "
+            "để trống. Chinese là âm Hán Việt IN HOA; nhiều âm ngăn cách bằng ・. Mnemonic ngắn, "
+            "dựa trên cấu trúc chữ; không bịa nguồn gốc Kanji. Ghi required_vocabulary nguyên dạng "
+            "vào RequiredVocabulary. ImagePrompt không tạo ở lượt này, luôn trả ImagePrompt là chuỗi rỗng.\n"
+            f"Schema kanji: {json.dumps(output_schema, ensure_ascii=False)}"
+        )
+
+    generated = _call_json_api(prompt, config)
+    extra = set(generated) - set(schema)
+    if extra:
+        raise RuntimeError(f"Chat API returned fields outside the {identity} schema: {sorted(extra)}")
+    for name, value_from_api in generated.items():
+        if not isinstance(value_from_api, str):
+            raise RuntimeError(f"Chat API field {name!r} must be a string.")
+    for name in schema:
+        if name == "ImagePrompt" or name not in model_fields:
+            continue
+        if not fields.get(name, "").strip():
+            fields[name] = generated.get(name, "").strip()
+    if identity in model_fields and not fields.get(identity, "").strip():
+        fields[identity] = value
+    if identity == "Kanji" and "RequiredVocabulary" in model_fields:
+        if not fields.get("RequiredVocabulary", "").strip() and required_vocabulary:
+            fields["RequiredVocabulary"] = required_vocabulary
+
+
 def generate_missing_fields(row, fields, model_fields, config):
     identity = next((name for name in ("Word", "Kanji") if row.get(name, "").strip()), None)
+    if identity is None:
+        raise ValueError("WordGenerator requires non-empty Word or Kanji in the source row.")
+
+    anchor_field = "Reading" if identity == "Word" else "MeaningJP"
+    if not fields.get(anchor_field, "").strip():
+        _generate_schema_fields(identity, row, fields, model_fields, config)
+
     eligible = WORD_CHAT_FIELDS if identity == "Word" else KANJI_CHAT_FIELDS
     missing = [
         name for name in model_fields
@@ -48,13 +206,15 @@ def generate_missing_fields(row, fields, model_fields, config):
         ]
 
     if missing:
-        batch_config = config.get("batch", {}).get("word_kanji_generate", {})
+        batch_config = config.get("services", {}).get(
+            "word_generator", config.get("batch", {}).get("word_kanji_generate", {})
+        )
         base = str(batch_config.get("chat_api_base", config.get("chat_api_base", ""))).strip().rstrip("/")
         model = str(batch_config.get("chat_model", config.get("chat_model", ""))).strip()
         api_key = str(batch_config.get("chat_api_key", config.get("chat_api_key", ""))).strip()
         if not base or not model:
             raise RuntimeError(
-                "Configure batch.word_kanji_generate.chat_api_base and chat_model in config.json."
+                "Configure services.word_generator.chat_api_base and chat_model in config.json."
             )
         source_language = str(config.get("source_language", "Japanese")).strip()
         destination_language = str(config.get("destination_language", "Vietnamese")).strip()
@@ -171,9 +331,22 @@ def generate_missing_fields(row, fields, model_fields, config):
 
 def generation_plan(row, fields, model_fields):
     identity = next((name for name in ("Word", "Kanji") if row.get(name, "").strip()), None)
+    if identity is None:
+        raise ValueError("WordGenerator requires non-empty Word or Kanji in the source row.")
     eligible = WORD_CHAT_FIELDS if identity == "Word" else KANJI_CHAT_FIELDS
-    chat = [name for name in model_fields if name in eligible and not fields.get(name, "").strip()]
-    if identity == "Word":
+    anchor_field = "Reading" if identity == "Word" else "MeaningJP"
+    if not fields.get(anchor_field, "").strip():
+        schema = WORD_SCHEMA if identity == "Word" else KANJI_SCHEMA
+        chat = [
+            name for name in model_fields
+            if name in schema and name != "ImagePrompt" and not fields.get(name, "").strip()
+        ]
+    else:
+        chat = [
+            name for name in model_fields
+            if name in eligible and not fields.get(name, "").strip()
+        ]
+    if identity == "Word" and fields.get(anchor_field, "").strip():
         chat = [
             name for name in chat
             if name not in {"MeaningSource"} and not name.endswith("_Source")

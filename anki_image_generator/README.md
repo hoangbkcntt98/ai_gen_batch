@@ -19,10 +19,10 @@ environment after creating it with `py -m venv .venv`. If `venv` is unavailable
 on Debian/Ubuntu, install the `python3-full` package first.
 
 Set PostgreSQL and image API values in `config.json`. Set
-`batch.image_generate.media_dir` to Anki's `collection.media` directory for
-local storage. `batch.image_generate.upload_provider` supports `local` (default),
+`services.image_generator.media_dir` to Anki's `collection.media` directory for
+local storage. `services.image_generator.upload_provider` supports `local` (default),
 `oci`, and `drive`. Local uploads save generated images in `media_dir`.
-For OCI, set `batch.image_generate.image_base_path` to an Object Storage
+For OCI, set `services.image_generator.image_base_path` to an Object Storage
 pre-authenticated request URL with object-create permission. For Google Drive,
 set it to the destination folder ID and place OAuth Desktop client credentials
 in `client.json` beside `config.json`. First Drive run opens Google OAuth flow
@@ -55,7 +55,7 @@ before updating it. New and recovered jobs receive a
 `locked_by_task_id` stores Python process PID. Job outcomes and
 successful file names are stored in `result`; error messages are stored in
 `response`.
-`batch.image_generate.clean_error` defaults to `true` and deletes all `error`
+`services.image_generator.clean_error` defaults to `true` and deletes all `error`
 history rows before a normal run. The `run_batch.sh` prompt can override it.
 Cleanup is skipped during `--recovery` so error rows remain available to retry.
 `run_batch.sh` also prompts `Set Images If Completed` (default `true`); it runs
@@ -71,7 +71,7 @@ Manual queue inserts are not required.
 
 `word_kanji_generate.py` fills missing learning fields in both configured
 `anki_word` and `anki_kanji` tables through an OpenAI-compatible chat API. Set
-`batch.word_kanji_generate.chat_api_base`, `chat_model`, and `chat_api_key` in
+`services.word_generator.chat_api_base`, `chat_model`, and `chat_api_key` in
 `config.json` to a chat-completions endpoint; image API settings are separate.
 The config supports a total `limit`, `overwrite_existing_fields`, per-table
 `skip_fields`, `temperature`, and `timeout_seconds`.
@@ -119,7 +119,7 @@ with AnkiWeb after a successful import:
 python import_spreadsheet_to_anki.py --sync
 ```
 
-During import, the configured `batch.word_kanji_generate` chat API fills empty
+During import, the configured `services.word_generator` chat API fills empty
 text-learning fields supported by each note type, including `Reading`,
 `MeaningDestination`, `Usage`, `Notes`, Chinese readings, and applicable
 example/vocabulary fields. It receives spreadsheet and mapped note values as
@@ -130,7 +130,7 @@ fields. Importer generates supported audio fields with Edge TTS, stores each
 MP3 through AnkiConnect `storeMediaFile`, then writes `[sound:...]` into note
 fields. Word example audio uses `ExampleN_Source`, kanji example audio uses
 `ExampleN_JP`, and reading/vocabulary audio uses its matching text field.
-Configure `batch.tts.api_base`, `model`, `api_key`, and `timeout_seconds` in
+Configure `services.tts_generator.api_base`, `model`, `api_key`, and `timeout_seconds` in
 `config.json`. The importer calls the configured `/audio/speech` endpoint,
 stores MP3 through AnkiConnect `storeMediaFile`, then writes `[sound:...]` into
 note fields. New-note filenames use the returned Anki note ID. For example, the
@@ -197,7 +197,7 @@ Equivalent unittest discovery: `python -m unittest discover -s tests -v`.
 `Word`/`Kanji` rows and `Tags` to configured note types/decks, generates missing
 text fields, creates the note, then fills missing audio and image fields.
 Configure `anki_import.note_types`, Chat/TTS/Image API settings, and
-`batch.image_generate.media_dir` in `config.json`.
+`services.image_generator.media_dir` in `config.json`.
 
 ```bash
 python spreadsheet_anki_creator.py --input spreadsheet_export.txt --dry-run
@@ -213,7 +213,7 @@ media updates complete.
 
 For local storage, run `python setting_image_to_notes.py` to rename completed
 image files and update their `result` values. Local directory comes from
-`batch.image_generate.image_base_path` when set, otherwise `media_dir`. The
+`services.image_generator.image_base_path` when set, otherwise `media_dir`. The
 script records `(old_result, new_result)` pairs in `temp.txt` before updating
 the database. For OCI and Drive, remote rename is unsupported; passing
 `--replace-note-image` updates note `Image` fields with an HTML `<img>` tag.

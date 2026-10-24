@@ -118,13 +118,15 @@ def prompt_for(mode: str, source: str, required_vocabulary: str, config: dict[st
 
 
 def request_data(mode: str, source: str, required_vocabulary: str, config: dict[str, Any]) -> dict[str, str]:
-    batch_config = config.get("batch", {}).get("word_kanji_generate", {})
+    batch_config = config.get("services", {}).get(
+        "word_generator", config.get("batch", {}).get("word_kanji_generate", {})
+    )
     base = str(batch_config.get("chat_api_base", config.get("chat_api_base", ""))).strip().rstrip("/")
     model = str(batch_config.get("chat_model", config.get("chat_model", ""))).strip()
     api_key = str(batch_config.get("chat_api_key", config.get("chat_api_key", ""))).strip()
     if not base or not model:
         raise RuntimeError(
-            "Configure batch.word_kanji_generate.chat_api_base and chat_model in config.json."
+            "Configure services.word_generator.chat_api_base and chat_model in config.json."
         )
     payload = {
         "model": model,
@@ -203,7 +205,7 @@ def generate_table(
     selected = [f'"{source_field}"'] + ([f'"{control}"'] if control else [])
     where = f'COALESCE(BTRIM("{source_field}"), \'\') <> \'\''
     validated_skip_fields = [
-        _identifier(field, f"batch.word_kanji_generate.skip_fields.{mode}")
+        _identifier(field, f"services.word_generator.skip_fields.{mode}")
         for field in skip_fields
     ]
     for field in validated_skip_fields:
@@ -276,8 +278,9 @@ def run(config: dict[str, Any], modes: tuple[str, ...], limit: int | None, overw
         for mode in modes:
             if remaining == 0:
                 break
-            configured_skip_fields = config.get("batch", {}).get(
-                "word_kanji_generate", {}
+            configured_skip_fields = config.get("services", {}).get(
+                "word_generator",
+                config.get("batch", {}).get("word_kanji_generate", {}),
             ).get("skip_fields", {})
             if isinstance(configured_skip_fields, dict):
                 skip_fields = configured_skip_fields.get(mode, [])
@@ -285,7 +288,7 @@ def run(config: dict[str, Any], modes: tuple[str, ...], limit: int | None, overw
                 skip_fields = configured_skip_fields
             if not isinstance(skip_fields, list):
                 raise ValueError(
-                    f"batch.word_kanji_generate.skip_fields.{mode} must be a JSON array."
+                    f"services.word_generator.skip_fields.{mode} must be a JSON array."
                 )
             found, changed, failed = generate_table(
                 connection, config, mode, remaining, overwrite, skip_fields, dry_run
@@ -320,16 +323,18 @@ def main(argv: list[str] | None = None) -> int:
             config = json.load(stream)
         if not isinstance(config, dict):
             raise ValueError("Config must be a JSON object.")
-        batch = config.get("batch", {}).get("word_kanji_generate", {})
-        configured_limit = batch.get("limit")
+        settings = config.get("services", {}).get(
+            "word_generator", config.get("batch", {}).get("word_kanji_generate", {})
+        )
+        configured_limit = settings.get("limit")
         limit_value = args.limit if args.limit is not None else configured_limit
         limit = None if limit_value in (None, "") else int(limit_value)
         if limit is not None and limit < 1:
             raise ValueError("limit must be a positive integer or null.")
-        configured_overwrite = batch.get("overwrite_existing_fields", False)
+        configured_overwrite = settings.get("overwrite_existing_fields", False)
         if not isinstance(configured_overwrite, bool):
             raise ValueError(
-                "batch.word_kanji_generate.overwrite_existing_fields must be true or false."
+                "services.word_generator.overwrite_existing_fields must be true or false."
             )
         overwrite = configured_overwrite if args.overwrite is None else args.overwrite
         types = ("word", "kanji") if args.type == "all" else (args.type,)

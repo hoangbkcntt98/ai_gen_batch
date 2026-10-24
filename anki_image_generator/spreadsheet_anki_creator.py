@@ -114,7 +114,9 @@ def create_notes(
     deck_names = connector.call("deckNames")
     result = ImportResult()
     media_setting = str(
-        config.get("batch", {}).get("image_generate", {}).get("media_dir", "")
+        config.get("services", {}).get(
+            "image_generator", config.get("batch", {}).get("image_generate", {})
+        ).get("media_dir", "")
     ).strip()
     media_dir = Path(media_setting).expanduser() if media_setting else Path.cwd()
     if not media_dir.is_absolute():
