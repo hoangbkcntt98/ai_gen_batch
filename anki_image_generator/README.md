@@ -89,6 +89,64 @@ the config setting. Existing generated fields remain unchanged unless overwrite
 is enabled. A row listed by `skip_fields` is excluded when any listed field is
 non-empty.
 
+## Import spreadsheet rows into Anki
+
+Set `anki_import.note_types.word` and `anki_import.note_types.kanji` in
+`config.json` to existing Anki note type names. Export the Google Sheet, start
+the local AnkiConnect server, then preview:
+
+```bash
+python export_google_sheet.py
+./anki_connect_server.sh start
+python import_spreadsheet_to_anki.py --dry-run
+```
+
+Importer reads every tab in `spreadsheet_export.txt`. Rows with a non-empty
+`Word` use configured word note type; rows with a non-empty `Kanji` use
+configured kanji note type. Exact tag matching against existing Anki deck names
+selects destination deck; row fails if no deck tag or multiple deck tags match.
+The deck-matching tag remains attached to note along with other tags. Matching
+Anki fields are imported directly when header matches; for example,
+`Example1_Source` maps to same-named field. If no exact field exists, importer
+tries `_Source` aliases such as `Meaning_Source` to `MeaningSource` or `Meaning`.
+`Tags` values split on semicolons. Use `--field-map
+'{"Meaning_Source":"MeaningSource"}'` to override field mapping. Import skips
+notes Anki identifies as duplicates. After import, script prints current note
+counts for every deck and collection total. Add `--sync` to sync the collection
+with AnkiWeb after a successful import:
+
+```bash
+python import_spreadsheet_to_anki.py --sync
+```
+
+During import, the configured `batch.word_kanji_generate` chat API fills empty
+text-learning fields supported by each note type, including `Reading`,
+`MeaningDestination`, `Usage`, `Notes`, Chinese readings, and applicable
+example/vocabulary fields. It receives spreadsheet and mapped note values as
+context and returns JSON keyed by missing Anki field names. Existing values
+remain unchanged. Word `ImagePrompt` uses the configured prompt template;
+kanji `ImagePrompt` is chat-generated. `Image` and `*_Audio` are tool-generated
+fields. Importer generates supported audio fields with Edge TTS, stores each
+MP3 through AnkiConnect `storeMediaFile`, then writes `[sound:...]` into note
+fields. Word example audio uses `ExampleN_Source`, kanji example audio uses
+`ExampleN_JP`, and reading/vocabulary audio uses its matching text field.
+Voice, rate, volume, pitch, and timeout can be set under `batch.tts`; defaults
+use `ja-JP-NanamiNeural`. `--sync` runs AnkiConnect sync after note creation
+and audio storage complete successfully. `--dry-run` reports planned tool
+fields but does not call generation APIs. Install dependencies with
+`python -m pip install -r requirements.txt`.
+
+Use `--update-existing` to fill missing mapped fields on matching notes from a
+previous import. It only fills empty fields and leaves existing field content
+unchanged:
+
+```bash
+python import_spreadsheet_to_anki.py --update-existing --sync
+```
+
+The matching decks and note types must already exist in Anki. Anki must be able
+to access AnkiWeb for sync to succeed.
+
 For local storage, run `python setting_image_to_notes.py` to rename completed
 image files and update their `result` values. Local directory comes from
 `batch.image_generate.image_base_path` when set, otherwise `media_dir`. The
@@ -113,8 +171,8 @@ Use `nohup .venv/bin/python -u batch_image_generate.py --limit 20 > batch.log 2>
 to cap a run. Follow logs with `tail -f batch.log`; stop with
 `kill "$(cat batch.pid)"`.
 
-To check for a running image batch every 60 seconds and start one with default
-`run_batch.sh` settings when none is active:
+To check every 60 seconds and start image generation and word/kanji generation
+when neither corresponding batch is active:
 
 ```bash
 ./batch_image_watchdog.sh start
@@ -122,7 +180,10 @@ To check for a running image batch every 60 seconds and start one with default
 ./batch_image_watchdog.sh stop
 ```
 
-The watchdog checks immediately, then every 60 seconds by default. Set
+The watchdog checks immediately, then every 60 seconds by default. It runs
+`run_batch.sh` for images and `.venv/bin/python word_kanji_generate.py --type all`
+for word/kanji fields. Word/kanji output goes to
+`batch_logs/word_kanji_generate.log`. Set
 `WATCH_INTERVAL_SECONDS` when starting it to change the interval, for example
 `WATCH_INTERVAL_SECONDS=300 ./batch_image_watchdog.sh start` for five minutes.
 Its output goes to `batch_logs/watchdog.log`. Stopping the watchdog does not

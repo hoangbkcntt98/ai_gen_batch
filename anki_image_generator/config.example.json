@@ -40,6 +40,20 @@
       "chat_model": "YOUR_CHAT_MODEL",
       "temperature": 0.2,
       "timeout_seconds": 120
+    },
+    "tts": {
+      "voice": "ja-JP-NanamiNeural",
+      "rate": "+0%",
+      "volume": "+0%",
+      "pitch": "+0Hz",
+      "timeout_seconds": 120
+    }
+  },
+  "anki_import": {
+    "api_url": "http://127.0.0.1:8765",
+    "note_types": {
+      "word": "YOUR_WORD_NOTE_TYPE",
+      "kanji": "YOUR_KANJI_NOTE_TYPE"
     }
   }
 }

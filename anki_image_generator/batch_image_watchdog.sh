@@ -4,23 +4,39 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 WATCH_DIR="$SCRIPT_DIR/batch_logs"
 PID_FILE="$WATCH_DIR/watchdog.pid"
-LOCK_FILE="$WATCH_DIR/watchdog.lock"
+LOCK_FILE="$WATCH_DIR/watchdog.loop.lock"
 LOG_FILE="$WATCH_DIR/watchdog.log"
 SCRIPT_NAME="$(basename -- "$0")"
-WATCH_INTERVAL_SECONDS="${WATCH_INTERVAL_SECONDS:-60}"
+WATCH_INTERVAL_SECONDS="${WATCH_INTERVAL_SECONDS:-3600}"  # Default to 1 hour
 
-watchdog_is_running() {
-  [[ -f "$PID_FILE" ]] || return 1
+find_watchdog_pid() {
   local pid command
-  pid="$(cat "$PID_FILE")"
-  [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null || return 1
-  command="$(ps -p "$pid" -o args= 2>/dev/null || true)"
-  [[ "$command" == *"$SCRIPT_NAME loop"* ]]
+  if [[ -f "$PID_FILE" ]]; then
+    pid="$(cat "$PID_FILE")"
+    if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
+      command="$(ps -p "$pid" -o args= 2>/dev/null || true)"
+      if [[ "$command" == *"$SCRIPT_DIR/$SCRIPT_NAME loop"* ]]; then
+        echo "$pid"
+        return 0
+      fi
+    fi
+  fi
+
+  while read -r pid command; do
+    [[ "$pid" == "$$" ]] && continue
+    if [[ "$command" == *"$SCRIPT_DIR/$SCRIPT_NAME loop"* ]]; then
+      echo "$pid"
+      return 0
+    fi
+  done < <(ps -eo pid=,args=)
+  return 1
 }
 
 start_watchdog() {
-  if watchdog_is_running; then
-    echo "Watchdog already running: PID $(cat "$PID_FILE")"
+  local running_pid
+  if running_pid="$(find_watchdog_pid)"; then
+    echo "$running_pid" >"$PID_FILE"
+    echo "Watchdog already running: PID $running_pid"
     return 0
   fi
 
@@ -32,15 +48,20 @@ start_watchdog() {
 }
 
 stop_watchdog() {
-  if ! watchdog_is_running; then
+  local pid
+  if ! pid="$(find_watchdog_pid)"; then
     rm -f "$PID_FILE"
     echo "Watchdog not running."
     return 0
   fi
 
-  local pid
-  pid="$(cat "$PID_FILE")"
+  echo "$pid" >"$PID_FILE"
   kill "$pid"
+  while read -r child command; do
+    if [[ "$command" == sleep* ]]; then
+      kill "$child" 2>/dev/null || true
+    fi
+  done < <(ps -o pid=,args= --ppid "$pid" 2>/dev/null || true)
   echo "Stopped watchdog: PID $pid"
 }
 
@@ -53,6 +74,9 @@ watch_loop() {
   mkdir -p "$WATCH_DIR"
   exec 9>"$LOCK_FILE"
   if ! flock -n 9; then
+    if [[ -f "$PID_FILE" && "$(cat "$PID_FILE")" == "$$" ]]; then
+      rm -f "$PID_FILE"
+    fi
     echo "Watchdog already running; exiting."
     return 0
   fi
@@ -76,8 +100,20 @@ watch_loop() {
         DRY_RUN=false \
         MEDIA_DIR= \
         RUN_IN_BACKGROUND=true \
-        "$SCRIPT_DIR/run_batch.sh" </dev/null || \
+        "$SCRIPT_DIR/run_batch.sh" 9>&- </dev/null || \
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] Could not start batch; see output above."
+    fi
+
+    if pgrep -f '[w]ord_kanji_generate\.py' >/dev/null; then
+      echo "[$(date '+%Y-%m-%d %H:%M:%S')] Word/kanji batch active; skipping."
+    else
+      echo "[$(date '+%Y-%m-%d %H:%M:%S')] No word/kanji batch active; starting batch."
+      nohup "$SCRIPT_DIR/.venv/bin/python" -u \
+        "$SCRIPT_DIR/word_kanji_generate.py" \
+        --config "$SCRIPT_DIR/config.json" \
+        --type all \
+        >>"$WATCH_DIR/word_kanji_generate.log" 2>&1 9>&- </dev/null &
+      echo "[$(date '+%Y-%m-%d %H:%M:%S')] Started word/kanji batch: PID $!"
     fi
     sleep "$WATCH_INTERVAL_SECONDS"
   done
@@ -87,9 +123,11 @@ case "${1:-start}" in
   start) start_watchdog ;;
   stop) stop_watchdog ;;
   status)
-    if watchdog_is_running; then
-      echo "Watchdog running: PID $(cat "$PID_FILE")"
+    if pid="$(find_watchdog_pid)"; then
+      echo "$pid" >"$PID_FILE"
+      echo "Watchdog running: PID $pid"
     else
+      rm -f "$PID_FILE"
       echo "Watchdog not running."
       exit 1
     fi
