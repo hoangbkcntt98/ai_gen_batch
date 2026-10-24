@@ -245,6 +245,36 @@ combined with `image_base_path`, while existing full URLs remain unchanged.
 
 ## Run in the background on Linux
 
+Generate missing images for existing Anki notes:
+
+```bash
+python -m batch.images --limit 100 --step 10
+```
+
+`limit` caps eligible notes; `step` groups image generation into chunks. Both
+can be set in `services.image_generator` (`limit: null` means no cap). The
+batch skips notes with a non-empty `Image`, missing `ImagePrompt`, or missing
+`Word`/`Kanji`. It syncs Anki before scanning and after each chunk.
+
+Run any Python script repeatedly with a watcher:
+
+```bash
+./watcher.sh start batch/anki_notes.py --interval 60s
+./watcher.sh status batch/anki_notes.py
+./watcher.sh pid batch/anki_notes.py
+./watcher.sh stop batch/anki_notes.py
+```
+
+Watcher runs script immediately, then waits given interval after each run
+finishes. It does not overlap runs. Interval accepts seconds (`60s`), minutes
+(`5m`), or hours (`1h`). Python stdout/stderr goes to
+`batch_logs/anki_notes.log`; watcher events and exit codes go to
+`batch_logs/anki_notes.watcher.log`; PID goes to
+`batch_logs/anki_notes.watcher.pid`. The active Python child PID is stored in
+`batch_logs/anki_notes.python.pid`. The watcher runs from the project root and
+adds that root to `PYTHONPATH`, so scripts under `batch/` can import
+`helpers`, `services`, and `models`. Add script arguments after `--`.
+
 From this folder:
 
 ```bash

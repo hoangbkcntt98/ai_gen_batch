@@ -22,6 +22,7 @@
       "skip_existing_image": false,
       "timeout_seconds": 240,
       "limit": null,
+      "step": 10,
       "job_type": "image_generate",
       "clean_error": true,
       "upload_provider": "local",
