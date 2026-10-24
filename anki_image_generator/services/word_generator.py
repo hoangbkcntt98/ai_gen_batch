@@ -480,7 +480,10 @@ def generate_missing_fields(
                 value = ""
             if not isinstance(value, str):
                 raise RuntimeError(f"Chat API field {field!r} must be a string.")
-            fields[field] = value.strip()
+            value = value.strip()
+            if identity == "Kanji" and field == "PhoneticPart" and not value:
+                value = "無し"
+            fields[field] = value
 
     if identity == "Word" and "ImagePrompt" in model_fields and not fields.get("ImagePrompt", "").strip():
         meaning = (
@@ -544,15 +547,31 @@ def generation_plan(row, fields, model_fields):
         identity == "Word" and "ImagePrompt" in model_fields
         and not fields.get("ImagePrompt", "").strip()
     ) else []
-    tools = [
-        name for name in model_fields
-        if (name == "Image" or name.endswith("_Audio"))
-        and not fields.get(name, "").strip()
-    ]
+    tools = []
+    for name in model_fields:
+        if fields.get(name, "").strip():
+            continue
+        if name == "Image":
+            tools.append(name)
+        elif name.endswith("_Audio") and _has_audio_source(name, fields):
+            tools.append(name)
     return chat, prompt, tools
 
 
 
+
+
+def _has_audio_source(audio_field: str, fields: dict[str, str]) -> bool:
+    example = re.fullmatch(r"Example(\d+)_Audio", audio_field)
+    if example:
+        number = example.group(1)
+        source_fields = (f"Example{number}_JP", f"Example{number}_Source")
+    elif audio_field == "Reading_Audio":
+        source_fields = ("Reading", "Word")
+    else:
+        # RequiredVocabulary audio is intentionally not generated.
+        return False
+    return any(fields.get(name, "").strip() for name in source_fields)
 
 
 class WordGenerator:

@@ -21,8 +21,6 @@ def _source_fields(audio_field: str) -> tuple[str, ...]:
         return (f"Example{number}_JP", f"Example{number}_Source")
     if audio_field == "Reading_Audio":
         return ("Reading", "Word")
-    if audio_field == "RequiredVocabulary_Audio":
-        return ("RequiredVocabulary", "Kanji")
     return ()
 
 

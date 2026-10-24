@@ -109,6 +109,38 @@ class TestJobManager(unittest.TestCase):
         with self.assertRaises(ValueError):
             _identifier("bad-name", "table")
 
+    def test_note_job_claim_skips_existing_locked_processing_job(self):
+        manager = JobManager({})
+        connection = MagicMock()
+        cursor = connection.cursor.return_value.__enter__.return_value
+        cursor.fetchone.return_value = (1,)
+        manager.connect = MagicMock(return_value=connection)
+
+        job_id = manager.try_start_anki_note_job(42, "WordModel")
+
+        self.assertIsNone(job_id)
+        self.assertEqual(cursor.execute.call_count, 2)
+        self.assertNotIn(
+            "INSERT INTO",
+            " ".join(str(call.args[0]) for call in cursor.execute.call_args_list),
+        )
+        connection.commit.assert_called_once()
+        connection.close.assert_called_once()
+
+    def test_note_job_claim_inserts_processing_job_when_unlocked(self):
+        manager = JobManager({})
+        connection = MagicMock()
+        cursor = connection.cursor.return_value.__enter__.return_value
+        cursor.fetchone.side_effect = [None, (99,)]
+        manager.connect = MagicMock(return_value=connection)
+
+        job_id = manager.try_start_anki_note_job(42, "WordModel")
+
+        self.assertEqual(job_id, 99)
+        self.assertIn("locked_by_task_id", cursor.execute.call_args.args[0])
+        connection.commit.assert_called_once()
+        connection.close.assert_called_once()
+
 
 class TestTTSGenerator(unittest.TestCase):
     def test_generates_missing_audio_field(self):
@@ -134,17 +166,67 @@ class TestTTSGenerator(unittest.TestCase):
         self.assertEqual(base64.b64decode(next(iter(stored.values()))), b"audio-bytes")
 
 
+    def test_does_not_generate_required_vocabulary_audio(self):
+        post = MagicMock()
+        stored = {}
+        generator = TTSGenerator(
+            {"services": {"tts_generator": {"api_base": "http://tts/v1", "model": "voice"}}},
+            request_post=post,
+        )
+
+        fields = generator.generate_audio_fields(
+            {"Kanji": "生", "RequiredVocabulary": "生きる", "RequiredVocabulary_Audio": ""},
+            ["RequiredVocabulary_Audio"],
+            lambda name, data: stored.update({name: data}),
+            note_id=7,
+            identity="生",
+        )
+
+        self.assertEqual(fields["RequiredVocabulary_Audio"], "")
+        self.assertEqual(stored, {})
+        post.assert_not_called()
+
+
 class TestWordGenerator(unittest.TestCase):
     def test_generation_plan_and_image_prompt(self):
         plan = generation_plan(
             {"Word": "渋々"},
-            {"Reading": "", "ImagePrompt": "", "Reading_Audio": ""},
+            {"Word": "渋々", "Reading": "", "ImagePrompt": "", "Reading_Audio": ""},
             ["Reading", "ImagePrompt", "Reading_Audio"],
         )
         self.assertEqual(plan, (["Reading"], ["ImagePrompt"], ["Reading_Audio"]))
         prompt = build_image_prompt("渋々", "reluctantly")
         self.assertIn('"渋々" ("reluctantly")', prompt)
         self.assertIn("no text, no watermark", prompt)
+
+    def test_generation_plan_excludes_required_vocabulary_audio_for_kanji(self):
+        plan = generation_plan(
+            {"Kanji": "生"},
+            {
+                "MeaningJP": "生きる",
+                "RequiredVocabulary": "生きる",
+                "RequiredVocabulary_Audio": "",
+            },
+            ["MeaningJP", "RequiredVocabulary", "RequiredVocabulary_Audio"],
+        )
+
+        self.assertNotIn("RequiredVocabulary_Audio", plan[2])
+
+    def test_generation_plan_ignores_audio_without_source_text(self):
+        fields = {
+            "Kanji": "沿",
+            "MeaningJP": "沿う",
+            "Example1_JP": "川に沿って歩く。",
+            "Example3_JP": "",
+            "Example3_Audio": "",
+        }
+        plan = generation_plan(
+            {"Kanji": "沿"},
+            fields,
+            ["Kanji", "MeaningJP", "Example1_JP", "Example3_JP", "Example3_Audio"],
+        )
+
+        self.assertEqual(plan, ([], [], []))
 
     def test_generates_missing_text_fields(self):
         response = MagicMock()
@@ -163,6 +245,31 @@ class TestWordGenerator(unittest.TestCase):
                 ["Reading", "MeaningDestination"],
             )
         self.assertEqual(fields, {"Reading": "あて", "MeaningDestination": "to guess"})
+
+    def test_empty_phonetic_part_is_filled_with_none_marker(self):
+        fields = {
+            "Kanji": "至",
+            "MeaningJP": "到達する、極める",
+            "PhoneticPart": "",
+        }
+        response = MagicMock()
+        response.status_code = 200
+        response.text = ""
+        response.json.return_value = {
+            "choices": [{"message": {"content": '{"PhoneticPart":""}'}}]
+        }
+
+        with patch("services.word_generator.requests.post", return_value=response):
+            generate_missing_fields(
+                {"Kanji": "至"},
+                fields,
+                list(fields),
+                {"services": {"word_generator": {
+                    "chat_api_base": "http://chat/v1", "chat_model": "test"
+                }}},
+            )
+
+        self.assertEqual(fields["PhoneticPart"], "無し")
 
     def test_missing_reading_triggers_full_word_schema_generation(self):
         fields = {

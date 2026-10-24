@@ -10,6 +10,7 @@ from typing import Any
 from helpers.logger import log
 from models import AnkiNotesResult
 from services import AnkiConnector, ImageGenerator, JobManager, TTSGenerator, WordGenerator
+from services.word_generator import generation_plan
 
 
 class AnkiNotesBatch:
@@ -48,128 +49,212 @@ class AnkiNotesBatch:
         raise ValueError(f"Note {note.get('noteId')} has no non-empty Word or Kanji field.")
 
     def process(self, limit: int | None = None) -> AnkiNotesResult:
-        """Process notes until `limit` notes need actual field updates."""
+        """Select notes needing work, then process selected note IDs."""
         selected_limit = self.default_limit if limit is None else limit
         if selected_limit is not None:
             if isinstance(selected_limit, bool) or not isinstance(selected_limit, int):
                 raise ValueError("limit must be a positive integer or None.")
             if selected_limit < 1:
                 raise ValueError("limit must be a positive integer or None.")
-        notes = self.connector.all_notes()
         result = AnkiNotesResult()
-        actionable_count = 0
         job_type = str(self.settings.get("job_type", "anki_notes")).strip() or "anki_notes"
 
-        for note in notes:
-            if selected_limit is not None and actionable_count >= selected_limit:
-                break
-            result.processed += 1
-            note_id = int(note["noteId"])
-            model_name = str(note.get("modelName", ""))
-            raw_fields = note.get("fields", {})
-            fields = {
-                name: str(value.get("value", "")) if isinstance(value, dict) else str(value or "")
-                for name, value in raw_fields.items()
-            }
-            display = fields.get("Word", "").strip() or fields.get("Kanji", "").strip() or "?"
-            job_id: int | None = None
-            try:
-                identity_field, identity_value = self._identity(note, fields)
-                before = dict(fields)
-                model_fields = list(fields)
+        self.connector.sync()
+        try:
+            notes = self.connector.all_notes()
+            notes_by_id: dict[int, dict[str, Any]] = {}
+            prepared: dict[int, dict[str, Any]] = {}
+            pending_note_ids: list[int] = []
 
-                self.word_creator.generate_missing_fields(
-                    {identity_field: identity_value, **fields},
-                    fields,
-                    model_fields,
-                )
-
-                image_config = self.config.get("services", {}).get("image_generator", {})
-                image_field = str(image_config.get("image_field", "Image"))
-                prompt = fields.get("ImagePrompt", "").strip()
-                if image_field in fields and prompt and not fields.get(image_field, "").strip():
-                    media_dir = Path(str(image_config.get("media_dir", "") or ".")).expanduser()
-                    if not media_dir.is_absolute():
-                        media_dir = (self.config_path.resolve().parent / media_dir).resolve()
-                    fields[image_field] = self.image_creator.generate_for_note(
-                        prompt, identity_value, note_id, media_dir
-                    )
-
-                self.tts_creator.generate_audio_fields(
-                    fields,
-                    model_fields,
-                    self.connector.store_media_file,
-                    note_id=note_id,
-                    identity=identity_value,
-                )
-
-                changed_fields = {
-                    key: value for key, value in fields.items()
-                    if value != before.get(key, "")
+            # Decide full work list before creating any batch_jobs or running generators.
+            for note in notes:
+                note_id = int(note["noteId"])
+                notes_by_id[note_id] = note
+                model_name = str(note.get("modelName", ""))
+                raw_fields = note.get("fields", {})
+                fields = {
+                    name: str(value.get("value", "")) if isinstance(value, dict) else str(value or "")
+                    for name, value in raw_fields.items()
                 }
-                if changed_fields:
-                    actionable_count += 1
-                    job_id = self.job_manager.create_anki_note_job(
+                display = fields.get("Word", "").strip() or fields.get("Kanji", "").strip() or "?"
+                try:
+                    identity_field, identity_value = self._identity(note, fields)
+                    model_fields = list(fields)
+                    row = {identity_field: identity_value, **fields}
+                    chat_fields, prompt_fields, tool_fields = generation_plan(
+                        row, fields, model_fields
+                    )
+                    if not (chat_fields or prompt_fields or tool_fields):
+                        log(
+                            "anki_notes",
+                            self.log_dir,
+                            f"note={note_id} {identity_field.lower()}={display!r} "
+                            "status=skipped reason=no_missing_fields",
+                            "INFO",
+                        )
+                        continue
+                    prepared[note_id] = {
+                        "fields": fields,
+                        "display": display,
+                        "identity_field": identity_field,
+                        "identity_value": identity_value,
+                        "model_fields": model_fields,
+                        "row": row,
+                        "planned_fields": chat_fields + prompt_fields + tool_fields,
+                    }
+                    pending_note_ids.append(note_id)
+                except Exception as err:
+                    prepared[note_id] = {
+                        "fields": fields,
+                        "display": display,
+                        "preflight_error": err,
+                    }
+                    pending_note_ids.append(note_id)
+
+            candidate_count = len(pending_note_ids)
+            if selected_limit is not None:
+                pending_note_ids = pending_note_ids[:selected_limit]
+            log(
+                "anki_notes",
+                self.log_dir,
+                f"scan total_notes={len(notes)} candidates={candidate_count} "
+                f"selected={len(pending_note_ids)} limit="
+                f"{selected_limit if selected_limit is not None else 'unlimited'}",
+                "INFO",
+            )
+
+            for note_id in pending_note_ids:
+                note = notes_by_id[note_id]
+                model_name = str(note.get("modelName", ""))
+                item = prepared[note_id]
+                fields = item["fields"]
+                display = item["display"]
+                job_id: int | None = None
+                try:
+                    job_id = self.job_manager.try_start_anki_note_job(
                         note_id, model_name, job_type
                     )
-                    self.connector.update_note_fields(note_id, changed_fields)
-                created_fields = sorted(
-                    field for field in changed_fields
-                    if field == image_field or field.endswith("_Audio")
-                )
-                filled_fields = sorted(set(changed_fields) - set(created_fields))
+                    if job_id is None:
+                        log(
+                            "anki_notes",
+                            self.log_dir,
+                            f"note={note_id} item={display!r} "
+                            "status=skipped reason=locked_by_task_id",
+                            "INFO",
+                        )
+                        continue
+                    if "preflight_error" in item:
+                        raise item["preflight_error"]
 
-                note_result = {
-                    "anki_note_id": note_id,
-                    identity_field.lower(): identity_value,
-                    "image": fields.get(image_field, ""),
-                    "audio": {
+                    identity_field = item["identity_field"]
+                    identity_value = item["identity_value"]
+                    model_fields = item["model_fields"]
+                    row = item["row"]
+                    before = dict(fields)
+                    self.word_creator.generate_missing_fields(
+                        row, fields, model_fields
+                    )
+
+                    image_config = self.config.get("services", {}).get("image_generator", {})
+                    image_field = str(image_config.get("image_field", "Image"))
+                    prompt = fields.get("ImagePrompt", "").strip()
+                    if image_field in fields and prompt and not fields.get(image_field, "").strip():
+                        media_dir = Path(str(image_config.get("media_dir", "") or ".")).expanduser()
+                        if not media_dir.is_absolute():
+                            media_dir = (self.config_path.resolve().parent / media_dir).resolve()
+                        fields[image_field] = self.image_creator.generate_for_note(
+                            prompt, identity_value, note_id, media_dir
+                        )
+
+                    self.tts_creator.generate_audio_fields(
+                        fields,
+                        model_fields,
+                        self.connector.store_media_file,
+                        note_id=note_id,
+                        identity=identity_value,
+                    )
+
+                    changed_fields = {
                         key: value for key, value in fields.items()
-                        if key.endswith("_Audio") and value.strip()
-                    },
-                }
-                if job_id is not None:
+                        if value != before.get(key, "")
+                    }
+                    if changed_fields:
+                        self.connector.update_note_fields(note_id, changed_fields)
+                    created_fields = sorted(
+                        field for field in changed_fields
+                        if field == image_field or field.endswith("_Audio")
+                    )
+                    filled_fields = sorted(set(changed_fields) - set(created_fields))
+
+                    note_result = {
+                        "anki_note_id": note_id,
+                        identity_field.lower(): identity_value,
+                        "image": fields.get(image_field, ""),
+                        "audio": {
+                            key: value for key, value in fields.items()
+                            if key.endswith("_Audio") and value.strip()
+                        },
+                    }
                     self.job_manager.finish_anki_note_job(
                         job_id, "completed", result=note_result
                     )
-                result.succeeded += 1
-                status = "updated" if changed_fields else "skipped"
-                details = []
-                if filled_fields:
-                    details.append(f"filled_fields={','.join(filled_fields)}")
-                if created_fields:
-                    details.append(f"created_fields={','.join(created_fields)}")
-                if not changed_fields:
-                    details.append("reason=no_missing_fields")
-                log(
-                    "anki_notes",
-                    self.log_dir,
-                    f"note={note_id} {identity_field.lower()}={display!r} "
-                    f"status={status} {' '.join(details)}".rstrip(),
-                    "INFO",
-                )
-            except Exception as err:
-                result.failed += 1
-                if job_id is None:
-                    try:
-                        job_id = self.job_manager.create_anki_note_job(
-                            note_id, model_name, job_type
+                    if changed_fields:
+                        result.processed += 1
+                        result.succeeded += 1
+                    status = "updated" if changed_fields else "skipped"
+                    details = []
+                    if filled_fields:
+                        details.append(f"filled_fields={','.join(filled_fields)}")
+                    if created_fields:
+                        details.append(f"created_fields={','.join(created_fields)}")
+                    if not changed_fields:
+                        details.append("reason=no_fields_changed")
+                        details.append(
+                            f"planned_fields={','.join(item['planned_fields']) or 'unknown'}"
                         )
-                    except Exception as job_err:
-                        err = RuntimeError(f"{err}; job creation failed: {job_err}")
-                if job_id is not None:
-                    try:
-                        self.job_manager.finish_anki_note_job(
-                            job_id, "error", response=str(err)
-                        )
-                    except Exception as job_err:
-                        err = RuntimeError(f"{err}; job update failed: {job_err}")
-                log(
-                    "anki_notes",
-                    self.log_dir,
-                    f"note={note_id} item={display!r} status=error error={err}",
-                    "ERROR",
-                )
+                    log(
+                        "anki_notes",
+                        self.log_dir,
+                        f"note={note_id} {identity_field.lower()}={display!r} "
+                        f"status={status} {' '.join(details)}".rstrip(),
+                        "INFO",
+                    )
+                except Exception as err:
+                    if job_id is None:
+                        job_start_failed = False
+                        try:
+                            job_id = self.job_manager.try_start_anki_note_job(
+                                note_id, model_name, job_type
+                            )
+                        except Exception as job_err:
+                            job_start_failed = True
+                            err = RuntimeError(f"{err}; job creation failed: {job_err}")
+                        if job_id is None and not job_start_failed:
+                            log(
+                                "anki_notes",
+                                self.log_dir,
+                                f"note={note_id} item={display!r} "
+                                "status=skipped reason=locked_by_task_id",
+                                "INFO",
+                            )
+                            continue
+                    result.processed += 1
+                    result.failed += 1
+                    if job_id is not None:
+                        try:
+                            self.job_manager.finish_anki_note_job(
+                                job_id, "error", response=str(err)
+                            )
+                        except Exception as job_err:
+                            err = RuntimeError(f"{err}; job update failed: {job_err}")
+                    log(
+                        "anki_notes",
+                        self.log_dir,
+                        f"note={note_id} item={display!r} status=error error={err}",
+                        "ERROR",
+                    )
+        finally:
+            self.connector.sync()
         return result
 
 
@@ -182,7 +267,7 @@ def main(argv: list[str] | None = None) -> int:
         "--limit",
         type=int,
         default=None,
-        help="Maximum notes with generated field changes; overrides services.anki_notes.limit.",
+        help="Maximum selected notes needing work; overrides services.anki_notes.limit.",
     )
     args = parser.parse_args(argv)
     try:

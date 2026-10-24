@@ -92,6 +92,7 @@ class TestAnkiNotesBatch(unittest.TestCase):
         ):
             connector = connector_cls.return_value
             connector.all_notes.return_value = [complete_note, incomplete_note]
+            connector.sync.return_value = None
 
             def fill_missing(row, fields, _model_fields):
                 if row["Word"] == "未知":
@@ -105,10 +106,11 @@ class TestAnkiNotesBatch(unittest.TestCase):
 
             result = batch.process(limit=1)
 
-        self.assertEqual((result.processed, result.succeeded, result.failed), (2, 2, 0))
-        jobs_cls.return_value.create_anki_note_job.assert_called_once_with(
+        self.assertEqual((result.processed, result.succeeded, result.failed), (1, 1, 0))
+        jobs_cls.return_value.try_start_anki_note_job.assert_called_once_with(
             21, "WordModel", "anki_notes"
         )
+        self.assertEqual(connector.sync.call_count, 2)
 
     def test_failure_is_recorded_and_processing_continues(self):
         note = {
@@ -137,7 +139,7 @@ class TestAnkiNotesBatch(unittest.TestCase):
             connector = connector_cls.return_value
             connector.all_notes.return_value = [note, second_note]
             jobs = jobs_cls.return_value
-            jobs.create_anki_note_job.side_effect = [101, 102]
+            jobs.try_start_anki_note_job.side_effect = [101, 102]
 
             def generate(row, fields, model_fields):
                 events.append("word")
@@ -161,7 +163,7 @@ class TestAnkiNotesBatch(unittest.TestCase):
         self.assertEqual((result.processed, result.succeeded, result.failed), (2, 1, 1))
         self.assertEqual(events, ["word", "word", "tts"])
         self.assertEqual(
-            [call.args[:2] for call in jobs.create_anki_note_job.call_args_list],
+            [call.args[:2] for call in jobs.try_start_anki_note_job.call_args_list],
             [(12, "WordModel"), (13, "WordModel")],
         )
         jobs.finish_anki_note_job.assert_any_call(101, "error", response="chat failure")
@@ -207,8 +209,80 @@ class TestAnkiNotesBatch(unittest.TestCase):
 
             result = batch.process()
 
-        self.assertEqual((result.succeeded, result.failed), (1, 0))
-        jobs_cls.return_value.create_anki_note_job.assert_not_called()
+        self.assertEqual((result.processed, result.succeeded, result.failed), (0, 0, 0))
+        jobs_cls.return_value.try_start_anki_note_job.assert_not_called()
+
+    def test_no_change_log_reports_planned_fields_not_missing_fields(self):
+        note = {
+            "noteId": 16,
+            "modelName": "WordModel",
+            "fields": {"Word": {"value": "あて"}, "Reading": {"value": ""}},
+        }
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch("batch.anki_notes.AnkiConnector") as connector_cls,
+            patch("batch.anki_notes.JobManager") as jobs_cls,
+            patch("batch.anki_notes.WordGenerator"),
+            patch("batch.anki_notes.ImageGenerator"),
+            patch("batch.anki_notes.TTSGenerator"),
+            patch("batch.anki_notes.log") as log_mock,
+        ):
+            connector = connector_cls.return_value
+            connector.all_notes.return_value = [note]
+            jobs_cls.return_value.try_start_anki_note_job.return_value = 101
+            batch = AnkiNotesBatch(
+                {"anki_import": {"note_types": {"word": "WordModel"}}},
+                Path(tmp) / "config.json",
+            )
+
+            result = batch.process()
+
+        self.assertEqual((result.processed, result.succeeded, result.failed), (0, 0, 0))
+        self.assertTrue(
+            any(
+                "reason=no_fields_changed planned_fields=Reading" in call.args[2]
+                for call in log_mock.call_args_list
+            )
+        )
+        self.assertTrue(
+            any(
+                "scan total_notes=1 candidates=1 selected=1 limit=unlimited"
+                in call.args[2]
+                for call in log_mock.call_args_list
+            )
+        )
+
+    def test_locked_note_is_skipped_without_running_generators(self):
+        note = {
+            "noteId": 15,
+            "modelName": "WordModel",
+            "fields": {"Word": {"value": "あて"}, "Reading": {"value": ""}},
+        }
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch("batch.anki_notes.AnkiConnector") as connector_cls,
+            patch("batch.anki_notes.JobManager") as jobs_cls,
+            patch("batch.anki_notes.WordGenerator") as word_cls,
+            patch("batch.anki_notes.ImageGenerator"),
+            patch("batch.anki_notes.TTSGenerator"),
+            patch("batch.anki_notes.log") as log_mock,
+        ):
+            connector = connector_cls.return_value
+            connector.all_notes.return_value = [note]
+            jobs_cls.return_value.try_start_anki_note_job.return_value = None
+            batch = AnkiNotesBatch(
+                {"anki_import": {"note_types": {"word": "WordModel"}}},
+                Path(tmp) / "config.json",
+            )
+
+            result = batch.process()
+
+        self.assertEqual((result.processed, result.succeeded, result.failed), (0, 0, 0))
+        word_cls.return_value.generate_missing_fields.assert_not_called()
+        jobs_cls.return_value.finish_anki_note_job.assert_not_called()
+        self.assertTrue(
+            any("reason=locked_by_task_id" in call.args[2] for call in log_mock.call_args_list)
+        )
 
     def test_logger_creates_timestamped_log(self):
         with tempfile.TemporaryDirectory() as tmp:
