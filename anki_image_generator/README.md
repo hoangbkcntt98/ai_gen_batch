@@ -130,10 +130,15 @@ fields. Importer generates supported audio fields with Edge TTS, stores each
 MP3 through AnkiConnect `storeMediaFile`, then writes `[sound:...]` into note
 fields. Word example audio uses `ExampleN_Source`, kanji example audio uses
 `ExampleN_JP`, and reading/vocabulary audio uses its matching text field.
-Voice, rate, volume, pitch, and timeout can be set under `batch.tts`; defaults
-use `ja-JP-NanamiNeural`. `--sync` runs AnkiConnect sync after note creation
-and audio storage complete successfully. `--dry-run` reports planned tool
-fields but does not call generation APIs. Install dependencies with
+Configure `batch.tts.api_base`, `model`, `api_key`, and `timeout_seconds` in
+`config.json`. The importer calls the configured `/audio/speech` endpoint,
+stores MP3 through AnkiConnect `storeMediaFile`, then writes `[sound:...]` into
+note fields. New-note filenames use the returned Anki note ID. For example, the
+model can be `edge-tts/ja-JP-KeitaNeural`; keep API keys private. Word example
+audio uses `ExampleN_Source`, kanji example audio uses `ExampleN_JP`, and
+reading/vocabulary audio uses its matching text field. `--sync` runs after note
+creation and audio storage succeed. `--dry-run` reports planned tool fields but
+does not call generation APIs. Install dependencies with
 `python -m pip install -r requirements.txt`.
 
 On duplicate notes, importer still creates and fills only missing audio fields
@@ -155,6 +160,36 @@ python import_spreadsheet_to_anki.py --update-existing --sync
 
 The matching decks and note types must already exist in Anki. Anki must be able
 to access AnkiWeb for sync to succeed.
+
+## Reusable Python services
+
+CLI scripts remain supported. Business APIs are also available as reusable
+classes:
+
+- `models.ImageJob`, `models.NoteDraft`, and `models.ImportResult`
+- `services.ImageGenerator` for queued image generation/storage
+- `services.WordGenerator` for missing Chat API fields
+- `services.TTSGenerator` for configured speech API audio
+- `services.AnkiConnector` for AnkiConnect actions, deck mapping, and sync
+- `services.GoogleSheetsService` for reading spreadsheet tabs
+
+Example: `from services import AnkiConnector, WordGenerator`.
+
+### Test services offline
+
+Tests use mocks; they do not call AnkiConnect, Google, Chat/TTS/Image APIs, or PostgreSQL.
+
+```bash
+python test_services.py                 # all services
+python test_services.py anki             # one service
+python test_services.py google
+python test_services.py image
+python test_services.py jobs
+python test_services.py tts
+python test_services.py word
+```
+
+Equivalent unittest discovery: `python -m unittest discover -s tests -v`.
 
 For local storage, run `python setting_image_to_notes.py` to rename completed
 image files and update their `result` values. Local directory comes from

@@ -42,10 +42,9 @@
       "timeout_seconds": 120
     },
     "tts": {
-      "voice": "ja-JP-NanamiNeural",
-      "rate": "+0%",
-      "volume": "+0%",
-      "pitch": "+0Hz",
+      "api_base": "YOUR_TTS_API_BASE",
+      "api_key": "YOUR_TTS_API_KEY",
+      "model": "edge-tts/ja-JP-KeitaNeural",
       "timeout_seconds": 120
     }
   },
