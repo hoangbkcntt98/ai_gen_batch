@@ -136,6 +136,15 @@ and audio storage complete successfully. `--dry-run` reports planned tool
 fields but does not call generation APIs. Install dependencies with
 `python -m pip install -r requirements.txt`.
 
+On duplicate notes, importer still creates and fills only missing audio fields
+without `--update-existing`; other note fields remain untouched. `--sync`
+syncs those audio updates too.
+Use `--regenerate-audio` to replace existing audio fields and media files:
+
+```bash
+python import_spreadsheet_to_anki.py --regenerate-audio --sync
+```
+
 Use `--update-existing` to fill missing mapped fields on matching notes from a
 previous import. It only fills empty fields and leaves existing field content
 unchanged:

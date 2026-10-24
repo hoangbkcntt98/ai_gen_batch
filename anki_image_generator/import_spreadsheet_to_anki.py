@@ -10,6 +10,7 @@ import io
 import json
 import re
 import sys
+import uuid
 from pathlib import Path
 
 import requests
@@ -70,6 +71,21 @@ def deck_note_counts(session, api_url):
         note_ids = call_api(session, api_url, "findNotes", {"query": query})
         counts.append((deck_name, len(note_ids)))
     return counts
+
+
+def find_matching_notes(session, api_url, deck, note_type, unique_field, unique_value):
+    query = (
+        f"deck:{json.dumps(deck, ensure_ascii=False)} "
+        f"note:{json.dumps(note_type, ensure_ascii=False)} "
+        f"{unique_field}:{json.dumps(unique_value, ensure_ascii=False)}"
+    )
+    note_ids = call_api(session, api_url, "findNotes", {"query": query})
+    info_list = call_api(session, api_url, "notesInfo", {"notes": note_ids})
+    return [
+        info for info in info_list
+        if info.get("modelName") == note_type
+        and info.get("fields", {}).get(unique_field, {}).get("value") == unique_value
+    ]
 
 
 def map_fields(row, model_fields, explicit_mapping):
@@ -301,7 +317,7 @@ def plain_text(value):
     return html.unescape(re.sub(r"<[^>]+>", "", value)).strip()
 
 
-def generate_audio_fields(fields, model_fields, config, session, api_url):
+def generate_audio_fields(fields, model_fields, config, session, api_url, force=False):
     batch_config = config.get("batch", {}).get("tts", {})
     voice = str(batch_config.get("voice", "ja-JP-NanamiNeural")).strip()
     rate = str(batch_config.get("rate", "+0%")).strip()
@@ -309,7 +325,10 @@ def generate_audio_fields(fields, model_fields, config, session, api_url):
     pitch = str(batch_config.get("pitch", "+0Hz")).strip()
     timeout = int(batch_config.get("timeout_seconds", 120))
     for audio_field in model_fields:
-        if not audio_field.endswith("_Audio") or fields.get(audio_field, "").strip():
+        if (
+            not audio_field.endswith("_Audio")
+            or (fields.get(audio_field, "").strip() and not force)
+        ):
             continue
         text_field = next(
             (name for name in audio_source_field(audio_field) if fields.get(name, "").strip()),
@@ -330,7 +349,8 @@ def generate_audio_fields(fields, model_fields, config, session, api_url):
         digest = hashlib.sha256(
             f"{voice}\0{audio_field}\0{text}".encode("utf-8")
         ).hexdigest()[:20]
-        filename = f"anki_{audio_field.lower()}_{digest}.mp3"
+        # Never point a regenerated sound tag at potentially stale media.
+        filename = f"anki_{audio_field.lower()}_{digest}_{uuid.uuid4().hex[:8]}.mp3"
         communicate = edge_tts.Communicate(
             text, voice, rate=rate, volume=volume, pitch=pitch
         )
@@ -349,7 +369,10 @@ def generate_audio_fields(fields, model_fields, config, session, api_url):
             session,
             api_url,
             "storeMediaFile",
-            {"filename": filename, "data": base64.b64encode(audio_data).decode("ascii")},
+            {
+                "filename": filename,
+                "data": base64.b64encode(audio_data).decode("ascii"),
+            },
             timeout=timeout,
         )
         fields[audio_field] = f"[sound:{filename}]"
@@ -380,6 +403,11 @@ def main() -> int:
         "--update-existing",
         action="store_true",
         help="Fill empty mapped fields on matching existing notes; never overwrite non-empty fields.",
+    )
+    parser.add_argument(
+        "--regenerate-audio",
+        action="store_true",
+        help="Regenerate audio fields even when they already contain sound tags.",
     )
     args = parser.parse_args()
 
@@ -487,43 +515,83 @@ def main() -> int:
                     },
                 )
                 if can_add and not can_add[0] and not args.update_existing:
-                    skipped += 1
-                    print(
-                        f"Skip duplicate: {sheet} row {row_number}: "
-                        f"{fields[unique_field]}"
+                    matched = find_matching_notes(
+                        session, api_url, deck, note_type,
+                        unique_field, fields[unique_field],
                     )
+                    filled_audio = False
+                    for info in matched:
+                        info_fields = info.get("fields", {})
+                        existing_fields = {
+                            name: str(info_fields.get(name, {}).get("value", ""))
+                            for name in model_fields
+                        }
+                        for name, value in fields.items():
+                            if name in model_fields and not existing_fields.get(name, "").strip():
+                                existing_fields[name] = value
+                        empty_audio_fields = {
+                            name for name in model_fields
+                            if name.endswith("_Audio")
+                            and (
+                                args.regenerate_audio
+                                or not existing_fields.get(name, "").strip()
+                            )
+                        }
+                        if not empty_audio_fields:
+                            continue
+                        for name in empty_audio_fields:
+                            existing_fields[name] = ""
+                        generate_audio_fields(
+                            existing_fields, model_fields, config, session, api_url,
+                            force=args.regenerate_audio,
+                        )
+                        audio_updates = {
+                            name: existing_fields[name]
+                            for name in empty_audio_fields
+                            if existing_fields.get(name, "").strip()
+                        }
+                        if audio_updates:
+                            call_api(
+                                session,
+                                api_url,
+                                "updateNoteFields",
+                                {"note": {"id": info["noteId"], "fields": audio_updates}},
+                            )
+                            filled_audio = True
+                    if filled_audio:
+                        updated += 1
+                        print(
+                            f"Filled missing audio on duplicate: "
+                            f"{sheet} row {row_number}: {fields[unique_field]}"
+                        )
+                    else:
+                        skipped += 1
+                        print(
+                            f"Skip duplicate (audio complete or source missing): "
+                            f"{sheet} row {row_number}: {fields[unique_field]}"
+                        )
                     continue
                 fields = generate_missing_fields(row, fields, model_fields, config)
-                generate_audio_fields(fields, model_fields, config, session, api_url)
+                generate_audio_fields(
+                    fields, model_fields, config, session, api_url,
+                    force=args.regenerate_audio,
+                )
                 if can_add and not can_add[0]:
                     if args.update_existing:
-                        query = (
-                            f"deck:{json.dumps(deck, ensure_ascii=False)} "
-                            f"note:{json.dumps(note_type, ensure_ascii=False)} "
-                            f"{unique_field}:{json.dumps(fields[unique_field], ensure_ascii=False)}"
+                        matched = find_matching_notes(
+                            session, api_url, deck, note_type,
+                            unique_field, fields[unique_field],
                         )
-                        note_ids = call_api(
-                            session, api_url, "findNotes", {"query": query}
-                        )
-                        info_list = call_api(
-                            session, api_url, "notesInfo", {"notes": note_ids}
-                        )
-                        matched = [
-                            info
-                            for info in info_list
-                            if info.get("modelName") == note_type
-                            and info.get("fields", {})
-                            .get(unique_field, {})
-                            .get("value")
-                            == fields[unique_field]
-                        ]
                         filled_any = False
                         for info in matched:
                             fields_to_fill = {
                                 name: value
                                 for name, value in fields.items()
                                 if value.strip()
-                                and not info.get("fields", {}).get(name, {}).get("value", "").strip()
+                                and (
+                                    not info.get("fields", {}).get(name, {}).get("value", "").strip()
+                                    or (args.regenerate_audio and name.endswith("_Audio"))
+                                )
                             }
                             if fields_to_fill:
                                 call_api(
