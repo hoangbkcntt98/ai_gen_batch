@@ -152,7 +152,10 @@ def create_notes(
                 continue
 
             word_generator.generate_missing_fields(
-                draft.source_row, draft.fields, model_fields
+                draft.source_row,
+                draft.fields,
+                model_fields,
+                allow_new_examples=True,
             )
             note_id = connector.add_note(
                 draft.deck, draft.note_type, draft.fields, draft.tags

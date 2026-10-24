@@ -48,18 +48,22 @@ class AnkiNotesBatch:
         raise ValueError(f"Note {note.get('noteId')} has no non-empty Word or Kanji field.")
 
     def process(self, limit: int | None = None) -> AnkiNotesResult:
-        """Process at most `limit` notes; use configured limit when omitted."""
+        """Process notes until `limit` notes need actual field updates."""
         selected_limit = self.default_limit if limit is None else limit
         if selected_limit is not None:
             if isinstance(selected_limit, bool) or not isinstance(selected_limit, int):
                 raise ValueError("limit must be a positive integer or None.")
             if selected_limit < 1:
                 raise ValueError("limit must be a positive integer or None.")
-        notes = self.connector.all_notes(limit=selected_limit)
-        result = AnkiNotesResult(processed=len(notes))
+        notes = self.connector.all_notes()
+        result = AnkiNotesResult()
+        actionable_count = 0
         job_type = str(self.settings.get("job_type", "anki_notes")).strip() or "anki_notes"
 
         for note in notes:
+            if selected_limit is not None and actionable_count >= selected_limit:
+                break
+            result.processed += 1
             note_id = int(note["noteId"])
             model_name = str(note.get("modelName", ""))
             raw_fields = note.get("fields", {})
@@ -104,6 +108,7 @@ class AnkiNotesBatch:
                     if value != before.get(key, "")
                 }
                 if changed_fields:
+                    actionable_count += 1
                     job_id = self.job_manager.create_anki_note_job(
                         note_id, model_name, job_type
                     )
@@ -177,7 +182,7 @@ def main(argv: list[str] | None = None) -> int:
         "--limit",
         type=int,
         default=None,
-        help="Maximum notes to process; overrides services.anki_notes.limit.",
+        help="Maximum notes with generated field changes; overrides services.anki_notes.limit.",
     )
     args = parser.parse_args(argv)
     try:

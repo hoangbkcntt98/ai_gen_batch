@@ -199,7 +199,233 @@ class TestWordGenerator(unittest.TestCase):
         self.assertIn('"user_level": "N3"', prompt)
         self.assertEqual(fields["MeaningSource"], "unwillingly")
         self.assertEqual(fields["MeaningDestination"], "reluctantly")
+        self.assertEqual(fields["Example1_Source"], "彼は渋々同意した。")
+        self.assertEqual(fields["Example1_Destination"], "He reluctantly agreed.")
         self.assertEqual(fields["ImagePrompt"], build_image_prompt("渋々", "reluctantly"))
+
+    def test_translates_existing_word_example_without_creating_source(self):
+        fields = {
+            "Word": "渋々",
+            "Reading": "しぶしぶ",
+            "Example3_Source": "彼は渋々同意した。",
+            "Example3_Destination": "",
+        }
+        response = MagicMock()
+        response.status_code = 200
+        response.text = ""
+        response.json.return_value = {
+            "choices": [{
+                "message": {"content": '{"Example3_Destination":"He reluctantly agreed."}'}
+            }]
+        }
+        with patch("services.word_generator.requests.post", return_value=response):
+            generate_missing_fields(
+                {"Word": "渋々"}, fields, list(fields),
+                {"services": {"word_generator": {
+                    "chat_api_base": "http://chat/v1", "chat_model": "test"
+                }}},
+            )
+        self.assertEqual(fields["Example3_Source"], "彼は渋々同意した。")
+        self.assertEqual(fields["Example3_Destination"], "He reluctantly agreed.")
+
+    def test_new_word_note_can_generate_complete_example_pair(self):
+        fields = {
+            "Word": "渋々",
+            "Reading": "しぶしぶ",
+            "Example1_Source": "",
+            "Example1_Destination": "",
+        }
+        response = MagicMock()
+        response.status_code = 200
+        response.text = ""
+        response.json.return_value = {
+            "choices": [{
+                "message": {
+                    "content": (
+                        '{"Example1_Source":"彼は渋々同意した。",'
+                        '"Example1_Destination":"He reluctantly agreed."}'
+                    )
+                }
+            }]
+        }
+        with patch("services.word_generator.requests.post", return_value=response):
+            generate_missing_fields(
+                {"Word": "渋々"}, fields, list(fields),
+                {"services": {"word_generator": {
+                    "chat_api_base": "http://chat/v1", "chat_model": "test"
+                }}},
+                allow_new_examples=True,
+            )
+        self.assertEqual(fields["Example1_Source"], "彼は渋々同意した。")
+        self.assertEqual(fields["Example1_Destination"], "He reluctantly agreed.")
+
+    def test_missing_fields_bootstraps_at_most_three_example_pairs(self):
+        fields = {"Word": "渋々", "Reading": ""}
+        for index in range(1, 7):
+            fields[f"Example{index}_Source"] = ""
+            fields[f"Example{index}_Destination"] = ""
+        response = {
+            "Word": "渋々",
+            "Reading": "しぶしぶ",
+            "Example1_Source": "source 1",
+            "Example1_Destination": "destination 1",
+            "Example2_Source": "source 2",
+            "Example2_Destination": "destination 2",
+            "Example3_Source": "source 3",
+            "Example3_Destination": "destination 3",
+            "Example4_Source": "must not be saved",
+            "Example4_Destination": "must not be saved",
+        }
+        with patch("services.word_generator._call_json_api", return_value=response) as call:
+            generate_missing_fields(
+                {"Word": "渋々"}, fields, list(fields), {"services": {}}
+            )
+
+        self.assertEqual(fields["Example3_Source"], "source 3")
+        self.assertEqual(fields["Example3_Destination"], "destination 3")
+        self.assertEqual(fields["Example4_Source"], "")
+        self.assertEqual(fields["Example4_Destination"], "")
+        prompt = call.call_args.args[0]
+        self.assertIn('"Example3_Source"', prompt)
+        self.assertNotIn('"Example4_Source"', prompt)
+
+    def test_existing_kanji_pair_disables_new_pairs_but_allows_translation(self):
+        fields = {
+            "Kanji": "生",
+            "MeaningJP": "いきる",
+            "Vocabulary1_JP": "生きる（いきる）",
+            "Vocabulary1_VN": "sống",
+            "Example2_JP": "彼は毎日生きている。",
+            "Example2_VN": "",
+            "Example3_JP": "",
+            "Example3_VN": "",
+        }
+        response = MagicMock()
+        response.status_code = 200
+        response.text = ""
+        response.json.return_value = {
+            "choices": [{
+                "message": {
+                    "content": (
+                        '{"Example2_VN":"Anh ấy sống mỗi ngày.",'
+                        '"Example3_JP":"new source","Example3_VN":"new translation"}'
+                    )
+                }
+            }]
+        }
+        config = {"services": {"word_generator": {
+            "chat_api_base": "http://chat/v1", "chat_model": "test"
+        }}}
+        with patch("services.word_generator.requests.post", return_value=response) as post:
+            generate_missing_fields({"Kanji": "生"}, fields, list(fields), config)
+
+        self.assertEqual(fields["Example2_VN"], "Anh ấy sống mỗi ngày.")
+        self.assertEqual(fields["Example3_JP"], "")
+        self.assertEqual(fields["Example3_VN"], "")
+        requested = post.call_args.kwargs["json"]["messages"][1]["content"]
+        self.assertIn("Example2_VN", requested)
+        self.assertNotIn("Example3_JP", requested)
+
+    def test_new_kanji_note_can_generate_complete_example_pair(self):
+        fields = {
+            "Kanji": "生",
+            "MeaningJP": "いきる",
+            "Example1_JP": "",
+            "Example1_VN": "",
+        }
+        response = MagicMock()
+        response.status_code = 200
+        response.text = ""
+        response.json.return_value = {
+            "choices": [{
+                "message": {
+                    "content": (
+                        '{"Example1_JP":"彼は毎日生きている。",'
+                        '"Example1_VN":"Anh ấy sống mỗi ngày."}'
+                    )
+                }
+            }]
+        }
+        with patch("services.word_generator.requests.post", return_value=response):
+            generate_missing_fields(
+                {"Kanji": "生"}, fields, list(fields),
+                {"services": {"word_generator": {
+                    "chat_api_base": "http://chat/v1", "chat_model": "test"
+                }}},
+                allow_new_examples=True,
+            )
+        self.assertEqual(fields["Example1_JP"], "彼は毎日生きている。")
+        self.assertEqual(fields["Example1_VN"], "Anh ấy sống mỗi ngày.")
+
+    def test_kanji_vocabulary_destination_requires_source(self):
+        fields = {
+            "Kanji": "生",
+            "MeaningJP": "いきる",
+            "Vocabulary1_JP": "生きる（いきる）",
+            "Vocabulary1_VN": "sống",
+            "Vocabulary3_JP": "",
+            "Vocabulary3_VN": "",
+        }
+        response = MagicMock()
+        response.status_code = 200
+        response.text = ""
+        response.json.return_value = {
+            "choices": [{"message": {"content": '{"Vocabulary3_VN":"sống"}'}}]
+        }
+        config = {"services": {"word_generator": {
+            "chat_api_base": "http://chat/v1", "chat_model": "test"
+        }}}
+        with patch(
+            "services.word_generator.requests.post",
+            return_value=response,
+        ) as post:
+            generate_missing_fields({"Kanji": "生"}, fields, list(fields), config)
+
+        self.assertEqual(fields["Vocabulary3_JP"], "")
+        self.assertEqual(fields["Vocabulary3_VN"], "")
+        post.assert_not_called()
+
+        fields["Vocabulary3_JP"] = "生きる（いきる）"
+        with patch("services.word_generator.requests.post", return_value=response) as post:
+            generate_missing_fields({"Kanji": "生"}, fields, list(fields), config)
+
+        self.assertEqual(fields["Vocabulary3_JP"], "生きる（いきる）")
+        self.assertEqual(fields["Vocabulary3_VN"], "sống")
+        requested_fields = post.call_args.kwargs["json"]["messages"][1]["content"]
+        self.assertIn("Return exactly these keys: Vocabulary3_VN.", requested_fields)
+
+    def test_existing_first_vocabulary_prevents_adding_later_slot(self):
+        fields = {
+            "Kanji": "生",
+            "MeaningJP": "いきる",
+            "Vocabulary1_JP": "",
+            "Vocabulary1_VN": "",
+            "Vocabulary3_JP": "",
+            "Vocabulary3_VN": "",
+        }
+        response = MagicMock()
+        response.status_code = 200
+        response.text = ""
+        response.json.return_value = {
+            "choices": [{
+                "message": {
+                    "content": (
+                        '{"Vocabulary1_JP":"生きる（いきる）",'
+                        '"Vocabulary3_JP":"人生（じんせい）",'
+                        '"Vocabulary3_VN":"cuộc đời"}'
+                    )
+                }
+            }]
+        }
+        config = {"services": {"word_generator": {
+            "chat_api_base": "http://chat/v1", "chat_model": "test"
+        }}}
+        with patch("services.word_generator.requests.post", return_value=response):
+            generate_missing_fields({"Kanji": "生"}, fields, list(fields), config)
+
+        self.assertEqual(fields["Vocabulary1_JP"], "")
+        self.assertEqual(fields["Vocabulary3_JP"], "")
+        self.assertEqual(fields["Vocabulary3_VN"], "")
 
     def test_missing_meaning_jp_triggers_full_kanji_schema(self):
         fields = {
@@ -208,6 +434,8 @@ class TestWordGenerator(unittest.TestCase):
             "RequiredVocabulary": "",
             "Vocabulary1_JP": "",
             "Vocabulary1_VN": "",
+            "Example3_JP": "",
+            "Example3_VN": "",
         }
         response = {
             "Kanji": "生",
@@ -216,6 +444,8 @@ class TestWordGenerator(unittest.TestCase):
             "RequiredVocabulary": "生きる",
             "Vocabulary1_JP": "生きる（いきる）",
             "Vocabulary1_VN": "sống",
+            "Example3_JP": "彼は毎日生きている。",
+            "Example3_VN": "Anh ấy sống mỗi ngày.",
         }
         with patch("services.word_generator._call_json_api", return_value=response) as call:
             generate_missing_fields(
@@ -228,7 +458,9 @@ class TestWordGenerator(unittest.TestCase):
         prompt = call.call_args.args[0]
         self.assertIn('"required_vocabulary": "生きる"', prompt)
         self.assertEqual(fields["RequiredVocabulary"], "生きる")
-        self.assertEqual(fields["Vocabulary1_JP"], "生きる（いきる）")
+        self.assertEqual(fields["Vocabulary1_JP"], "")
+        self.assertEqual(fields["Example3_JP"], "彼は毎日生きている。")
+        self.assertEqual(fields["Example3_VN"], "Anh ấy sống mỗi ngày.")
         self.assertNotIn("ImagePrompt", fields)
 
 
@@ -271,7 +503,9 @@ class TestSpreadsheetCreator(unittest.TestCase):
             patch("spreadsheet_anki_creator.ImageGenerator") as image_cls,
         ):
             word_cls.return_value.generate_missing_fields.side_effect = (
-                lambda row, fields, names: fields.update({"ImagePrompt": "prompt"})
+                lambda row, fields, names, **kwargs: fields.update(
+                    {"ImagePrompt": "prompt"}
+                )
             )
             tts_cls.return_value.generate_audio_fields.side_effect = (
                 lambda fields, names, store, **kwargs: fields.update(
@@ -284,6 +518,12 @@ class TestSpreadsheetCreator(unittest.TestCase):
 
         self.assertEqual(result.created, 1)
         self.assertEqual(result.failed, 0)
+        word_cls.return_value.generate_missing_fields.assert_called_once()
+        self.assertTrue(
+            word_cls.return_value.generate_missing_fields.call_args.kwargs[
+                "allow_new_examples"
+            ]
+        )
         connector.update_note_fields.assert_called_once_with(
             123,
             {
@@ -314,7 +554,9 @@ class TestSpreadsheetCreator(unittest.TestCase):
             patch("spreadsheet_anki_creator.ImageGenerator") as image_cls,
         ):
             word_cls.return_value.generate_missing_fields.side_effect = (
-                lambda _row, fields, _names: fields.update({"ImagePrompt": "prompt"})
+                lambda _row, fields, _names, **kwargs: fields.update(
+                    {"ImagePrompt": "prompt"}
+                )
             )
             result = create_notes(config, rows, Path("config.json"))
 

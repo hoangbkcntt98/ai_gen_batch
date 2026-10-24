@@ -317,6 +317,48 @@ class JobManager:
         finally:
             connection.close()
 
+    def try_start_anki_note_job(
+        self, note_id: int, object_type: str, job_type: str = "anki_notes"
+    ) -> int | None:
+        """Start note job unless another task already holds its processing lock."""
+        connection = self.connect()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext(%s))",
+                    (f"{job_type}:{int(note_id)}",),
+                )
+                cursor.execute(
+                    f'SELECT 1 FROM {self.job_table} '
+                    'WHERE "job_type" = %s AND "id" = %s AND "status" = %s '
+                    'AND "locked_by_task_id" IS NOT NULL LIMIT 1',
+                    (job_type, int(note_id), "processing"),
+                )
+                if cursor.fetchone():
+                    connection.commit()
+                    return None
+                cursor.execute(
+                    f'INSERT INTO {self.job_table} '
+                    '("job_type", "object_type", "id", "status", "started_at", "locked_by_task_id") '
+                    'VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP, %s) '
+                    'RETURNING "batch_job_id"',
+                    (
+                        job_type,
+                        object_type,
+                        int(note_id),
+                        "processing",
+                        os.getpid(),
+                    ),
+                )
+                row = cursor.fetchone()
+            connection.commit()
+            return int(row[0])
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
     def finish_anki_note_job(
         self,
         job_id: int,
@@ -331,7 +373,8 @@ class JobManager:
             with connection.cursor() as cursor:
                 cursor.execute(
                     f'UPDATE {self.job_table} SET "status" = %s, '
-                    '"ended_at" = CURRENT_TIMESTAMP, "result" = %s, "response" = %s '
+                    '"ended_at" = CURRENT_TIMESTAMP, "result" = %s, "response" = %s, '
+                    '"locked_by_task_id" = NULL '
                     'WHERE "batch_job_id" = %s',
                     (
                         status,

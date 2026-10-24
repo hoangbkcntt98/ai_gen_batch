@@ -225,9 +225,11 @@ with `filled_fields` and `created_fields`, `status=skipped` when no fields chang
 or `status=error` on failure. This batch updates existing notes; it does not create
 new Anki notes. Set
 `services.anki_notes.log_dir` to choose log location.
+`--limit N` counts notes whose fields actually changed; complete notes do not
+consume the limit.
 
 ```bash
-python -m batch.anki_notes
+python -m batch.anki_notes --limit 10
 ```
 
 For local storage, run `python setting_image_to_notes.py` to rename completed

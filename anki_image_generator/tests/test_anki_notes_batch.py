@@ -47,7 +47,7 @@ class TestAnkiNotesBatch(unittest.TestCase):
             result = batch.process(limit=5)
 
         self.assertEqual(result.processed, 0)
-        connector.all_notes.assert_called_once_with(limit=5)
+        connector.all_notes.assert_called_once_with()
 
     def test_process_uses_configured_limit_when_runtime_limit_omitted(self):
         with (
@@ -68,7 +68,47 @@ class TestAnkiNotesBatch(unittest.TestCase):
 
             batch.process()
 
-        connector.all_notes.assert_called_once_with(limit=3)
+        connector.all_notes.assert_called_once_with()
+
+    def test_limit_counts_only_notes_with_field_changes(self):
+        complete_note = {
+            "noteId": 20,
+            "modelName": "WordModel",
+            "fields": {"Word": {"value": "既知"}, "Reading": {"value": "きち"}},
+        }
+        incomplete_note = {
+            "noteId": 21,
+            "modelName": "WordModel",
+            "fields": {"Word": {"value": "未知"}, "Reading": {"value": ""}},
+        }
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch("batch.anki_notes.AnkiConnector") as connector_cls,
+            patch("batch.anki_notes.JobManager") as jobs_cls,
+            patch("batch.anki_notes.WordGenerator") as word_cls,
+            patch("batch.anki_notes.ImageGenerator"),
+            patch("batch.anki_notes.TTSGenerator"),
+            patch("batch.anki_notes.log"),
+        ):
+            connector = connector_cls.return_value
+            connector.all_notes.return_value = [complete_note, incomplete_note]
+
+            def fill_missing(row, fields, _model_fields):
+                if row["Word"] == "未知":
+                    fields["Reading"] = "みち"
+
+            word_cls.return_value.generate_missing_fields.side_effect = fill_missing
+            batch = AnkiNotesBatch(
+                {"anki_import": {"note_types": {"word": "WordModel"}}},
+                Path(tmp) / "config.json",
+            )
+
+            result = batch.process(limit=1)
+
+        self.assertEqual((result.processed, result.succeeded, result.failed), (2, 2, 0))
+        jobs_cls.return_value.create_anki_note_job.assert_called_once_with(
+            21, "WordModel", "anki_notes"
+        )
 
     def test_failure_is_recorded_and_processing_continues(self):
         note = {
