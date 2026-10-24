@@ -18,6 +18,7 @@ from services import (
     TTSGenerator,
     WordGenerator,
 )
+from services.word_generator import build_image_prompt
 
 
 def _split_tags(value: str) -> list[str]:
@@ -125,7 +126,7 @@ def create_notes(
     dry_run: bool = False,
     skip_images: bool | None = None,
     skip_tts: bool | None = None,
-    defer_word_generation: bool = False,
+    defer_generation: bool = False,
 ) -> ImportResult:
     import_config = config.get("anki_import", {})
     note_types = import_config.get("note_types", {})
@@ -183,12 +184,33 @@ def create_notes(
                 )
                 continue
 
-            if not (defer_word_generation and identity == "word"):
+            if not defer_generation:
                 word_generator.generate_missing_fields(
                     draft.source_row,
                     draft.fields,
                     model_fields,
                     allow_new_examples=True,
+                )
+            elif (
+                "ImagePrompt" in model_fields
+                and not draft.fields.get("ImagePrompt", "").strip()
+            ):
+                if identity == "word":
+                    meaning = (
+                        draft.fields.get("MeaningDestination", "").strip()
+                        or row.get("Meaning_Source", "").strip()
+                        or "its common meaning"
+                    )
+                else:
+                    meaning = (
+                        draft.fields.get("MeaningVI", "").strip()
+                        or draft.fields.get("MeaningJP", "").strip()
+                        or draft.fields.get("RequiredVocabulary", "").strip()
+                        or row.get("RequiredVocabulary", "").strip()
+                        or "its common meaning"
+                    )
+                draft.fields["ImagePrompt"] = build_image_prompt(
+                    identity_value, meaning
                 )
             note_id = connector.add_note(
                 draft.deck, draft.note_type, draft.fields, draft.tags
@@ -269,9 +291,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--skip-images", action="store_true", help="Skip image generation.")
     parser.add_argument("--skip-tts", action="store_true", help="Skip audio generation.")
     parser.add_argument(
+        "--defer-generation",
         "--defer-word-generation",
+        dest="defer_generation",
         action="store_true",
-        help="Create Word notes without AI field generation; process them later with batch.anki_notes.",
+        help="Create Word and Kanji notes without AI field generation; process them later with batch.anki_notes.",
     )
     args = parser.parse_args(argv)
     try:
@@ -293,7 +317,7 @@ def main(argv: list[str] | None = None) -> int:
             dry_run=args.dry_run,
             skip_images=True if args.skip_images else None,
             skip_tts=True if args.skip_tts else None,
-            defer_word_generation=args.defer_word_generation,
+            defer_generation=args.defer_generation,
         )
         print(
             f"Created: {result.created}; skipped: {result.skipped}; "

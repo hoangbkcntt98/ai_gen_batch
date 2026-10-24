@@ -130,13 +130,18 @@ after watcher options:
 ./watcher.sh status batch/images.py
 ./watcher.sh pid batch/images.py
 ./watcher.sh stop batch/images.py
+./watcher.sh --dashboard
 ```
 
 Override interval with `--interval`, for example `--interval 60s` or
 `--interval 5m`. Python output goes to `batch_logs/{name}.log`; watcher events
 go to `batch_logs/{name}.watcher.log`. The watcher uses a per-script
 `batch_logs/{name}.lock` to prevent overlapping runs. Use `--` before script
-arguments that could be confused with watcher options.
+arguments that could be confused with watcher options. `--dashboard` refreshes
+every 2 seconds and shows short script names, state, Python PID, and matching
+watcher PID, plus script arguments only. Names over 10 characters shorten to
+`...`; displayed arguments truncate after 60 characters. Press `Ctrl+C` to exit
+dashboard without stopping watchers.
 
 Run AnkiWeb sync every 5 minutes, with a 30-minute timeout per sync:
 
@@ -156,18 +161,27 @@ Start each watcher once. Replace `GOOGLE_SHEETS_URL` with the source URL; use
 `--input path/to/file.csv` for a CSV/TSV file instead:
 
 ```bash
-./watcher.sh start spreadsheet_anki_creator.py --interval 5m --input "GOOGLE_SHEETS_URL" --skip-images --skip-tts --defer-word-generation
-./watcher.sh start batch/anki_notes.py --interval 5m --identity word --skip-images --skip-sync
+./watcher.sh start spreadsheet_anki_creator.py --interval 5m --input "GOOGLE_SHEETS_URL" --skip-images --skip-tts --defer-generation
+./watcher.sh start batch/anki_notes.py --interval 5m --skip-images --skip-sync
 ./watcher.sh start batch/images.py --interval 5m --skip-sync
 ./watcher.sh start helpers/sync_ankiweb_to_local.py --interval 5m --timeout 1800
 ```
 
-Spreadsheet watcher creates new Word notes without AI field generation, image,
-audio, or sync. `anki_notes.py` fills missing Word fields and audio, but skips
-images and sync. `images.py` generates images without syncing; the separate
-AnkiWeb watcher handles sync. Each watcher has its own lock and waits 5 minutes
-after its job finishes before next run. Check or stop each watcher with
+Spreadsheet watcher creates Word and Kanji notes without AI field generation,
+image, audio, or sync. `anki_notes.py` fills missing Word/Kanji fields and audio,
+but skips images and sync. `images.py` generates images without syncing; the
+separate AnkiWeb watcher handles sync. Each watcher has its own lock and waits
+5 minutes after its job finishes before next run. Check or stop each watcher with
 `./watcher.sh status SCRIPT.py` or `./watcher.sh stop SCRIPT.py`.
+
+Do not pass `--identity word` to `anki_notes.py`; that limits processing to Word
+notes. To replace an existing word-only watcher, stop it and restart without an
+identity filter:
+
+```bash
+./watcher.sh stop batch/anki_notes.py
+./watcher.sh start batch/anki_notes.py --interval 5m --skip-images --skip-sync
+```
 
 ## Media and logs
 

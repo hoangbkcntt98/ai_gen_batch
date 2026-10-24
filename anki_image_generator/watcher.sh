@@ -12,11 +12,13 @@ Usage:
   ./watcher.sh status FILE.py
   ./watcher.sh pid FILE.py
   ./watcher.sh stop FILE.py
+  ./watcher.sh --dashboard
 
 Intervals accept seconds (60, 60s), minutes (5m), or hours (1h).
 Default interval is 30m.
 Unknown options and arguments are passed to FILE.py. Use -- before script
 arguments that could be confused with watcher options.
+The live dashboard refreshes every 2 seconds; press Ctrl+C to exit it.
 EOF
 }
 
@@ -35,6 +37,97 @@ pid_is_watcher() {
   [[ -r "/proc/$pid/cmdline" ]] || return 1
   cmdline="$(tr '\0' ' ' <"/proc/$pid/cmdline")"
   [[ "$cmdline" == *"$SELF"* && "$cmdline" == *"--worker"* ]]
+}
+
+dashboard() {
+  local watcher_file name watcher_pid python_pid python_pid_file script_path
+  local display_name state arg params script_index i
+  local -a args=() watcher_files=()
+
+  shopt -s nullglob
+  trap 'printf "\n"; exit 0' INT TERM
+  while true; do
+    watcher_files=("$LOG_DIR"/*.watcher.pid)
+    if [[ -t 1 ]]; then
+      printf '\033[H\033[2J'
+    fi
+    printf 'Watcher dashboard  %s\n' "$(date -Is)"
+    printf '%-10s %-9s %-12s %-12s %s\n' \
+      "Script" "State" "Python PID" "Watcher PID" "Args"
+    printf '%-10s %-9s %-12s %-12s %s\n' \
+      "----------" "---------" "------------" "------------" "----"
+
+    if ((${#watcher_files[@]} == 0)); then
+      echo "No watcher PID files found."
+    else
+      for watcher_file in "${watcher_files[@]}"; do
+        [[ -f "$watcher_file" ]] || continue
+        name="$(basename -- "$watcher_file" .watcher.pid)"
+        IFS= read -r watcher_pid <"$watcher_file" || watcher_pid=""
+        python_pid=""
+        script_path="${name}.py"
+        state="STALE"
+        params=""
+
+        if pid_is_watcher "$watcher_pid"; then
+          state="WAITING"
+          args=()
+          while IFS= read -r -d '' arg; do args+=("$arg"); done \
+            <"/proc/$watcher_pid/cmdline"
+          for ((script_index = 0; script_index < ${#args[@]}; script_index++)); do
+            if [[ "${args[$script_index]}" == *.py ]]; then
+              script_path="${args[$script_index]}"
+              for ((i = script_index + 8; i < ${#args[@]}; i++)); do
+                params+="$(printf '%q ' "${args[$i]}")"
+              done
+              params="${params% }"
+              break
+            fi
+          done
+          python_pid_file="$LOG_DIR/${name}.python.pid"
+          if [[ -f "$python_pid_file" ]]; then
+            IFS= read -r python_pid <"$python_pid_file" || python_pid=""
+          fi
+          if [[ "$python_pid" =~ ^[0-9]+$ ]] && kill -0 "$python_pid" 2>/dev/null; then
+            state="RUNNING"
+            args=()
+            while IFS= read -r -d '' arg; do args+=("$arg"); done \
+              <"/proc/$python_pid/cmdline"
+            for ((script_index = 0; script_index < ${#args[@]}; script_index++)); do
+              arg="${args[$script_index]}"
+              if [[ "$arg" == *.py ]]; then
+                script_path="$arg"
+                params=""
+                for ((i = script_index + 1; i < ${#args[@]}; i++)); do
+                  params+="$(printf '%q ' "${args[$i]}")"
+                done
+                params="${params% }"
+                break
+              fi
+            done
+          elif [[ "$state" == "WAITING" ]]; then
+            python_pid="-"
+          fi
+        else
+          python_pid="-"
+        fi
+
+        display_name="$(basename -- "$script_path")"
+        display_name="${display_name%.py}"
+        if ((${#display_name} > 10)); then
+          display_name="${display_name:0:7}..."
+        fi
+        if ((${#params} > 60)); then
+          params="${params:0:57}..."
+        fi
+        printf '%-10s %-9s %-12s %-12s %s\n' \
+          "$display_name" "$state" "${python_pid:--}" "${watcher_pid:--}" \
+          "${params:--}"
+      done
+    fi
+    printf '\nPress Ctrl+C to exit dashboard; watcher processes keep running.\n'
+    sleep 2
+  done
 }
 
 remove_pid_if_owner() {
@@ -108,6 +201,11 @@ if [[ "${1:-}" == "--worker" ]]; then
   shift
   worker "$@"
   exit $?
+fi
+
+if [[ "${1:-}" == "--dashboard" ]]; then
+  dashboard
+  exit 0
 fi
 
 if [[ "${1:-}" == "start" ]]; then

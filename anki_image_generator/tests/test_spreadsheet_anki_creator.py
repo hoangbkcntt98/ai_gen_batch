@@ -129,5 +129,51 @@ class TestDuplicateDeckLabel(unittest.TestCase):
         word_cls.return_value.generate_missing_fields.assert_not_called()
 
 
+class TestDeferredGeneration(unittest.TestCase):
+    def test_defer_generation_skips_ai_but_builds_kanji_image_prompt(self):
+        with (
+            patch("spreadsheet_anki_creator.AnkiConnector") as connector_cls,
+            patch("spreadsheet_anki_creator.WordGenerator") as word_cls,
+            patch("spreadsheet_anki_creator.TTSGenerator"),
+            patch("spreadsheet_anki_creator.ImageGenerator"),
+            patch(
+                "spreadsheet_anki_creator.build_image_prompt",
+                return_value="generated prompt",
+            ) as build_prompt,
+        ):
+            connector = connector_cls.return_value
+            connector.call.side_effect = [
+                ["DeckA"],
+                ["Kanji", "MeaningJP", "ImagePrompt"],
+            ]
+            connector.note_type_for.return_value = "KanjiModel"
+            connector.deck_for_tags.return_value = "DeckA"
+            connector.has_note_field_value.return_value = False
+            connector.add_note.return_value = 123
+
+            result = create_notes(
+                {"anki_import": {"note_types": {"kanji": "KanjiModel"}}},
+                [
+                    (
+                        "Sheet1",
+                        2,
+                        {"Kanji": "字", "MeaningJP": "文字", "Tags": "DeckA"},
+                    )
+                ],
+                Path("config.json"),
+                skip_images=True,
+                skip_tts=True,
+                defer_generation=True,
+            )
+
+        self.assertEqual(result.created, 1)
+        word_cls.return_value.generate_missing_fields.assert_not_called()
+        build_prompt.assert_called_once_with("字", "文字")
+        connector.add_note.assert_called_once()
+        self.assertEqual(
+            connector.add_note.call_args.args[2]["ImagePrompt"],
+            "generated prompt",
+        )
+
 if __name__ == "__main__":
     unittest.main()
