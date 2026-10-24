@@ -83,7 +83,7 @@ def _dict_rows(
 def _note_fields(row: dict[str, str], model_fields: list[str]) -> dict[str, str]:
     fields = {name: "" for name in model_fields}
     for source_name, value in row.items():
-        if source_name == "Tags":
+        if source_name in {"Tags", "Status"}:
             continue
         target = source_name if source_name in fields else source_name.replace("_", "")
         if target in fields and value:
@@ -128,6 +128,10 @@ def create_notes(
         media_dir = (config_path.resolve().parent / media_dir).resolve()
 
     for sheet, row_number, row in rows:
+        if "Status" in row and row["Status"].strip() != "SYNC_OK":
+            result.skipped += 1
+            print(f"SKIP Status: {sheet} row {row_number}")
+            continue
         try:
             identity = _identity(row)
             note_type = connector.note_type_for(identity, note_types)
@@ -143,8 +147,15 @@ def create_notes(
                 tags=tags,
                 source_row=row,
             )
-            if dry_run:
+            identity_field = "Word" if identity == "word" else "Kanji"
+            identity_value = draft.fields.get(identity_field, "").strip()
+            if connector.has_note_field_value(
+                note_type, identity_field, identity_value
+            ):
                 result.skipped += 1
+                print(f"SKIP duplicate: {sheet} row {row_number}")
+                continue
+            if dry_run:
                 print(
                     f"DRY-RUN {sheet} row {row_number}: "
                     f"deck={deck!r} model={note_type!r} fields={len(draft.fields)}"

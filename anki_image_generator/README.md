@@ -59,6 +59,35 @@ overrides the service-account JSON path. `--dry-run` checks rows and Anki
 metadata without creating notes. `--skip-images` and `--skip-tts` disable those
 generators for that run.
 
+## Sync AnkiWeb with local Anki
+
+Keep Anki and AnkiConnect server running, then run:
+
+```bash
+python -m helpers.sync_ankiweb_to_local
+```
+
+This triggers Anki's normal sync through AnkiConnect. It is bidirectional;
+Anki decides whether to download, upload, or resolve conflicts. It does not
+force a download-only operation. Optional flags: `--config PATH` and
+`--timeout SECONDS` (default 1800; increase for large collections).
+
+## Sync Anki notes to PostgreSQL
+
+Upsert notes from configured Word and Kanji note types into `anki_word` and
+`anki_kanji`:
+
+```bash
+python -m helpers.sync_anki_notes_to_postgres
+```
+
+The helper uses `pgsql_*` settings in `config.json` and matches note fields to
+same-named table columns. Both tables need an `anki_note_id` column. Each run
+deletes all rows from both tables, then inserts matching Anki notes in one
+transaction. If import fails, PostgreSQL rolls back the deletes too.
+Optional flags: `--config PATH` and `--limit N`. `--limit` still clears both
+tables, so use it only when intentionally creating a partial snapshot.
+
 ## Process existing notes
 
 Fill missing word fields, images, and audio:
@@ -105,6 +134,38 @@ python -m helpers.upload_media_to_oci
 ```
 
 Optional flags: `--config PATH` and `--media-dir PATH`.
+
+Download images under the configured OCI PAR prefix into `media_dir`:
+
+```bash
+python -m helpers.download_oci_to_media_dir
+```
+
+The PAR must allow listing and reading objects. Existing local files are
+preserved; pass `--overwrite` to replace them. The configured prefix is
+removed from local paths, so a PAR prefix ending in `/images/` downloads
+`images/file.png` as `media_dir/file.png`. Optional flags: `--config PATH` and
+`--media-dir PATH`. Keep PAR URLs private because they grant access to OCI
+objects.
+
+If download fails with `OCI listing failed: HTTP 404`, create a new PAR for
+the bucket with object read access and **Enable Object Listing** (`ListObjects`).
+Use the new PAR URL in `services.image_generator.image_base_path`; listing
+permission cannot be added to an existing PAR. If uploads also use this URL,
+grant the required write access too. Check that the PAR is not expired or
+revoked and that its bucket, namespace, and region are correct.
+
+Convert OCI PAR URLs in existing Anki `Image` fields to local Anki media:
+
+```bash
+python -m helpers.convert_anki_image_par_links --dry-run
+python -m helpers.convert_anki_image_par_links
+```
+
+The helper only removes the configured PAR base URL from matching `src`
+values, leaving each filename, then updates the note. It does not download or
+copy images; ensure those files already exist in Anki's media folder. `--limit`
+restricts the number of notes processed.
 
 Delete top-level `batch_logs/*.log` files every 12 hours by running:
 

@@ -485,14 +485,23 @@ def generate_missing_fields(
                 value = "無し"
             fields[field] = value
 
-    if identity == "Word" and "ImagePrompt" in model_fields and not fields.get("ImagePrompt", "").strip():
-        meaning = (
-            fields.get("MeaningDestination", "").strip()
-            or row.get("Meaning_Source", "").strip()
-            or "its common meaning"
-        )
+    if "ImagePrompt" in model_fields and not fields.get("ImagePrompt", "").strip():
+        if identity == "Word":
+            meaning = (
+                fields.get("MeaningDestination", "").strip()
+                or row.get("Meaning_Source", "").strip()
+                or "its common meaning"
+            )
+        else:
+            meaning = (
+                fields.get("MeaningVI", "").strip()
+                or fields.get("MeaningJP", "").strip()
+                or fields.get("RequiredVocabulary", "").strip()
+                or row.get("RequiredVocabulary", "").strip()
+                or "its common meaning"
+            )
         fields["ImagePrompt"] = build_image_prompt(
-            row.get("Word", "").strip(), meaning
+            row.get(identity, "").strip(), meaning
         )
     if identity == "Kanji" and _follow_up_for_vocabulary:
         new_vocabulary_source = any(

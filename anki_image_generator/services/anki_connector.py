@@ -77,6 +77,25 @@ class AnkiConnector:
             },
         )
 
+    def has_note_field_value(
+        self, note_type: str, field_name: str, value: str
+    ) -> bool:
+        """Check exact field value among notes of one model, across decks."""
+        query = f'note:"{note_type}"'
+        note_ids = self.call("findNotes", {"query": query})
+        for offset in range(0, len(note_ids), 200):
+            notes = self.call(
+                "notesInfo", {"notes": note_ids[offset : offset + 200]}
+            )
+            if any(
+                note.get("modelName") == note_type
+                and note.get("fields", {}).get(field_name, {}).get("value", "").strip()
+                == value.strip()
+                for note in notes
+            ):
+                return True
+        return False
+
     def update_note_fields(self, note_id: int, fields: dict[str, str]):
         return self.call(
             "updateNoteFields",

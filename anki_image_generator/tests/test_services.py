@@ -42,6 +42,23 @@ class TestAnkiConnector(unittest.TestCase):
         self.assertEqual(payload["params"]["note"]["modelName"], "WordModel")
         self.assertEqual(payload["params"]["note"]["tags"], ["anki"])
 
+    def test_checks_exact_field_value_across_notes_of_model(self):
+        connector = AnkiConnector()
+        connector.call = MagicMock(side_effect=[
+            [10],
+            [{
+                "modelName": "KanjiModel",
+                "fields": {"Kanji": {"value": "良"}},
+            }],
+        ])
+        self.assertTrue(
+            connector.has_note_field_value("KanjiModel", "Kanji", "良")
+        )
+        self.assertEqual(
+            connector.call.call_args_list[0].args,
+            ("findNotes", {"query": 'note:"KanjiModel"'}),
+        )
+
     def test_deck_mapping_requires_exactly_one_match(self):
         connector = AnkiConnector()
         self.assertEqual(connector.deck_for_tags(["tag", "Deck"], ["Deck"]), "Deck")
@@ -309,6 +326,30 @@ class TestWordGenerator(unittest.TestCase):
         self.assertEqual(fields["Example1_Source"], "彼は渋々同意した。")
         self.assertEqual(fields["Example1_Destination"], "He reluctantly agreed.")
         self.assertEqual(fields["ImagePrompt"], build_image_prompt("渋々", "reluctantly"))
+
+    def test_kanji_image_prompt_uses_same_format_as_word(self):
+        fields = {
+            "Kanji": "良",
+            "MeaningJP": "よい",
+            "MeaningVI": "tốt",
+            "ImagePrompt": "",
+        }
+        response = MagicMock()
+        response.status_code = 200
+        response.json.return_value = {
+            "choices": [{"message": {"content": "{}"}}]
+        }
+        with patch("services.word_generator.requests.post", return_value=response):
+            generate_missing_fields(
+                {"Kanji": "良"},
+                fields,
+                list(fields),
+                {"services": {"word_generator": {
+                    "chat_api_base": "http://chat/v1",
+                    "chat_model": "test",
+                }}},
+            )
+        self.assertEqual(fields["ImagePrompt"], build_image_prompt("良", "tốt"))
 
     def test_translates_existing_word_example_without_creating_source(self):
         fields = {
@@ -597,6 +638,7 @@ class TestSpreadsheetCreator(unittest.TestCase):
         connector.note_type_for.return_value = "WordModel"
         connector.deck_for_tags.return_value = "Deck"
         connector.add_note.return_value = 123
+        connector.has_note_field_value.return_value = False
         config = {
             "anki_import": {"note_types": {"word": "WordModel"}},
             "services": {"image_generator": {"media_dir": ""}},
@@ -646,6 +688,7 @@ class TestSpreadsheetCreator(unittest.TestCase):
         connector.note_type_for.return_value = "WordModel"
         connector.deck_for_tags.return_value = "Deck"
         connector.add_note.return_value = 123
+        connector.has_note_field_value.return_value = False
         config = {
             "anki_import": {"note_types": {"word": "WordModel"}},
             "services": {
