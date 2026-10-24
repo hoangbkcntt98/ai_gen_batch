@@ -8,12 +8,15 @@ SELF="$SCRIPT_DIR/$(basename -- "${BASH_SOURCE[0]}")"
 usage() {
   cat <<'EOF'
 Usage:
-  ./watcher.sh start FILE.py --interval 60s [-- PYTHON_SCRIPT_ARGS...]
+  ./watcher.sh start FILE.py [--interval 60s] [PYTHON_SCRIPT_ARGS...]
   ./watcher.sh status FILE.py
   ./watcher.sh pid FILE.py
   ./watcher.sh stop FILE.py
 
 Intervals accept seconds (60, 60s), minutes (5m), or hours (1h).
+Default interval is 30m.
+Unknown options and arguments are passed to FILE.py. Use -- before script
+arguments that could be confused with watcher options.
 EOF
 }
 
@@ -157,14 +160,14 @@ elif [[ "${1:-}" == "status" || "${1:-}" == "pid" || "${1:-}" == "stop" ]]; then
   exit 0
 fi
 
-if [[ $# -lt 3 ]]; then
+if [[ $# -lt 1 ]]; then
   usage >&2
   exit 2
 fi
 
 script="$1"
 shift
-interval=""
+interval="30m"
 script_args=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -179,18 +182,12 @@ while [[ $# -gt 0 ]]; do
       break
       ;;
     *)
-      echo "Unknown argument: $1" >&2
-      usage >&2
-      exit 2
+      script_args+=("$1")
+      shift
       ;;
   esac
 done
 
-if [[ -z "$interval" ]]; then
-  echo "Missing required --interval." >&2
-  usage >&2
-  exit 2
-fi
 if [[ "$interval" =~ ^([1-9][0-9]*)(s|m|h)?$ ]]; then
   amount="${BASH_REMATCH[1]}"
   unit="${BASH_REMATCH[2]:-s}"

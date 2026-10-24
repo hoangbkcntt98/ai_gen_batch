@@ -52,8 +52,8 @@
       "timeout_seconds": 120
     },
     "spreadsheet_anki_creator": {
-      "skip_images": false,
-      "skip_tts": false
+      "skip_images": true,
+      "skip_tts": true
     },
     "anki_notes": {
       "job_type": "anki_notes",

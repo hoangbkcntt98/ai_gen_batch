@@ -70,7 +70,11 @@ def upload_media(config: dict, config_path: Path, media_override: Path | None) -
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", type=Path, default=Path(__file__).with_name("config.json"))
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=Path(__file__).resolve().parents[1] / "config.json",
+    )
     parser.add_argument("--media-dir", type=Path, help="Override services.image_generator.media_dir.")
     args = parser.parse_args(argv)
     try:
