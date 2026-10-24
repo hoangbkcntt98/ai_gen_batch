@@ -1,0 +1,181 @@
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+from batch.anki_notes import AnkiNotesBatch
+from helpers.logger import log
+from services.anki_connector import AnkiConnector
+
+
+class TestAnkiConnectorNotes(unittest.TestCase):
+    def test_all_notes_uses_chunked_notes_info(self):
+        connector = AnkiConnector()
+        connector.call = MagicMock(side_effect=[[1, 2, 3], [{"noteId": 1}, {"noteId": 2}], [{"noteId": 3}]])
+
+        notes = connector.all_notes(chunk_size=2)
+
+        self.assertEqual([note["noteId"] for note in notes], [1, 2, 3])
+        self.assertEqual(connector.call.call_args_list[0].args[:2], ("findNotes", {"query": ""}))
+        self.assertEqual(connector.call.call_args_list[1].args[:2], ("notesInfo", {"notes": [1, 2]}))
+
+    def test_all_notes_applies_limit_before_fetching_fields(self):
+        connector = AnkiConnector()
+        connector.call = MagicMock(side_effect=[[1, 2, 3], [{"noteId": 1}, {"noteId": 2}]])
+
+        notes = connector.all_notes(limit=2)
+
+        self.assertEqual([note["noteId"] for note in notes], [1, 2])
+        connector.call.assert_called_with("notesInfo", {"notes": [1, 2]})
+
+
+class TestAnkiNotesBatch(unittest.TestCase):
+    def test_process_uses_runtime_limit(self):
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch("batch.anki_notes.AnkiConnector") as connector_cls,
+            patch("batch.anki_notes.JobManager"),
+            patch("batch.anki_notes.WordGenerator"),
+            patch("batch.anki_notes.ImageGenerator"),
+            patch("batch.anki_notes.TTSGenerator"),
+            patch("batch.anki_notes.log"),
+        ):
+            connector = connector_cls.return_value
+            connector.all_notes.return_value = []
+            batch = AnkiNotesBatch({}, Path(tmp) / "config.json")
+
+            result = batch.process(limit=5)
+
+        self.assertEqual(result.processed, 0)
+        connector.all_notes.assert_called_once_with(limit=5)
+
+    def test_process_uses_configured_limit_when_runtime_limit_omitted(self):
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch("batch.anki_notes.AnkiConnector") as connector_cls,
+            patch("batch.anki_notes.JobManager"),
+            patch("batch.anki_notes.WordGenerator"),
+            patch("batch.anki_notes.ImageGenerator"),
+            patch("batch.anki_notes.TTSGenerator"),
+            patch("batch.anki_notes.log"),
+        ):
+            connector = connector_cls.return_value
+            connector.all_notes.return_value = []
+            batch = AnkiNotesBatch(
+                {"services": {"anki_notes": {"limit": 3}}},
+                Path(tmp) / "config.json",
+            )
+
+            batch.process()
+
+        connector.all_notes.assert_called_once_with(limit=3)
+
+    def test_failure_is_recorded_and_processing_continues(self):
+        note = {
+            "noteId": 12,
+            "modelName": "WordModel",
+            "fields": {
+                "Word": {"value": "あて"},
+                "Reading": {"value": ""},
+                "MeaningDestination": {"value": ""},
+                "ImagePrompt": {"value": ""},
+                "Image": {"value": ""},
+                "Reading_Audio": {"value": ""},
+            },
+        }
+        second_note = {**note, "noteId": 13, "fields": {**note["fields"], "Word": {"value": "成功"}}}
+        events = []
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch("batch.anki_notes.AnkiConnector") as connector_cls,
+            patch("batch.anki_notes.JobManager") as jobs_cls,
+            patch("batch.anki_notes.WordGenerator") as word_cls,
+            patch("batch.anki_notes.ImageGenerator") as image_cls,
+            patch("batch.anki_notes.TTSGenerator") as tts_cls,
+            patch("batch.anki_notes.log") as log_mock,
+        ):
+            connector = connector_cls.return_value
+            connector.all_notes.return_value = [note, second_note]
+            jobs = jobs_cls.return_value
+            jobs.create_anki_note_job.side_effect = [101, 102]
+
+            def generate(row, fields, model_fields):
+                events.append("word")
+                if row["Word"] == "あて":
+                    raise RuntimeError("chat failure")
+                fields["Reading"] = "あて"
+
+            word_cls.return_value.generate_missing_fields.side_effect = generate
+            image_cls.return_value.generate_for_note.side_effect = (
+                lambda *args: events.append("image") or "<img>"
+            )
+            tts_cls.return_value.generate_audio_fields.side_effect = (
+                lambda fields, *_args, **_kwargs: events.append("tts") or fields
+            )
+            batch = AnkiNotesBatch(
+                {"anki_import": {"note_types": {"word": "WordModel"}}},
+                Path(tmp) / "config.json",
+            )
+            result = batch.process()
+
+        self.assertEqual((result.processed, result.succeeded, result.failed), (2, 1, 1))
+        self.assertEqual(events, ["word", "word", "tts"])
+        self.assertEqual(
+            [call.args[:2] for call in jobs.create_anki_note_job.call_args_list],
+            [(12, "WordModel"), (13, "WordModel")],
+        )
+        jobs.finish_anki_note_job.assert_any_call(101, "error", response="chat failure")
+        jobs.finish_anki_note_job.assert_any_call(
+            102,
+            "completed",
+            result={
+                "anki_note_id": 13,
+                "word": "成功",
+                "image": "",
+                "audio": {},
+            },
+        )
+        self.assertTrue(
+            any(
+                "status=updated filled_fields=Reading" in call.args[2]
+                for call in log_mock.call_args_list
+            )
+        )
+
+    def test_skipped_note_does_not_create_batch_job(self):
+        note = {
+            "noteId": 14,
+            "modelName": "WordModel",
+            "fields": {"Word": {"value": "あて"}, "Reading": {"value": "あて"}},
+        }
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch("batch.anki_notes.AnkiConnector") as connector_cls,
+            patch("batch.anki_notes.JobManager") as jobs_cls,
+            patch("batch.anki_notes.WordGenerator"),
+            patch("batch.anki_notes.ImageGenerator"),
+            patch("batch.anki_notes.TTSGenerator"),
+            patch("batch.anki_notes.log"),
+        ):
+            connector = connector_cls.return_value
+            connector.all_notes.return_value = [note]
+            batch = AnkiNotesBatch(
+                {"anki_import": {"note_types": {"word": "WordModel"}}},
+                Path(tmp) / "config.json",
+            )
+            batch.word_creator.generate_missing_fields = lambda *_args: None
+
+            result = batch.process()
+
+        self.assertEqual((result.succeeded, result.failed), (1, 0))
+        jobs_cls.return_value.create_anki_note_job.assert_not_called()
+
+    def test_logger_creates_timestamped_log(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = log("anki_notes_test", tmp, "note=1 status=completed")
+            self.assertRegex(path.name, r"^\d{14}_anki_notes_test\.log$")
+            self.assertIn("INFO note=1 status=completed", path.read_text(encoding="utf-8"))
+
+
+if __name__ == "__main__":
+    unittest.main()

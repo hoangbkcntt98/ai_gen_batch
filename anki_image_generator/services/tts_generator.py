@@ -2,10 +2,8 @@
 from __future__ import annotations
 
 import base64
-import hashlib
 import html
 import re
-import uuid
 from typing import Any, Callable
 
 import requests
@@ -87,13 +85,18 @@ class TTSGenerator:
             if not text:
                 continue
             audio_data = self.synthesize(text)
-            digest = hashlib.sha256(f"{audio_field}\0{text}".encode("utf-8")).hexdigest()[:12]
-            prefix = str(identity or "note")
-            filename = (
-                f"{prefix}_{note_id}_{audio_field.lower()}.mp3"
-                if note_id is not None
-                else f"{prefix}_{audio_field.lower()}_{digest}_{uuid.uuid4().hex[:8]}.mp3"
-            )
+            prefix = re.sub(
+                r"[^\w\u3040-\u30ff\u3400-\u9fff-]+",
+                "_",
+                str(identity or "note"),
+                flags=re.UNICODE,
+            ).strip("_") or "note"
+            if note_id is not None:
+                # Keep one deterministic audio file per field to avoid overwrites.
+                suffix = "" if audio_field == "Reading_Audio" else f"_{audio_field}"
+                filename = f"{prefix}_{note_id}{suffix}.mp3"
+            else:
+                filename = f"{prefix}_{audio_field}.mp3"
             store_media(filename, base64.b64encode(audio_data).decode("ascii"))
             fields[audio_field] = f"[sound:{filename}]"
         return fields

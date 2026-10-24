@@ -204,12 +204,31 @@ python spreadsheet_anki_creator.py --input spreadsheet_export.txt --dry-run
 python spreadsheet_anki_creator.py --input spreadsheet_export.txt --sync
 python spreadsheet_anki_creator.py --spreadsheet-id YOUR_SHEET_ID --sync
 python spreadsheet_anki_creator.py --input "https://docs.google.com/spreadsheets/d/YOUR_SHEET_ID/edit" --dry-run
+python spreadsheet_anki_creator.py --input spreadsheet_export.txt --skip-images --skip-tts
 ```
 
 Google Sheets reads use `account_service.json` beside the config by default;
 override with `--credentials`. Dry-run reads rows and queries Anki metadata but
 does not generate content, create notes, or sync. `--sync` syncs after note and
-media updates complete.
+media updates complete. `--skip-images` and `--skip-tts` disable those generators;
+defaults can also be set with `services.spreadsheet_anki_creator.skip_images` and
+`services.spreadsheet_anki_creator.skip_tts`.
+
+## Complete fields on existing Anki notes
+
+`batch/anki_notes.py` fetches existing notes through AnkiConnect, then runs word,
+image, and TTS generation in order. Only notes with changed fields get a
+`batch_jobs` history row; skipped notes do not. Failed generation attempts also
+get an error history row. Failures are recorded in the log and do not stop later
+notes. Logs record `status=updated`
+with `filled_fields` and `created_fields`, `status=skipped` when no fields changed,
+or `status=error` on failure. This batch updates existing notes; it does not create
+new Anki notes. Set
+`services.anki_notes.log_dir` to choose log location.
+
+```bash
+python -m batch.anki_notes
+```
 
 For local storage, run `python setting_image_to_notes.py` to rename completed
 image files and update their `result` values. Local directory comes from

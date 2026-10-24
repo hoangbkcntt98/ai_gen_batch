@@ -104,6 +104,8 @@ def create_notes(
     rows: list[tuple[str, int, dict[str, str]]],
     config_path: Path,
     dry_run: bool = False,
+    skip_images: bool | None = None,
+    skip_tts: bool | None = None,
 ) -> ImportResult:
     import_config = config.get("anki_import", {})
     note_types = import_config.get("note_types", {})
@@ -111,6 +113,9 @@ def create_notes(
     word_generator = WordGenerator(config)
     tts_generator = TTSGenerator(config)
     image_generator = ImageGenerator(config, config_path)
+    creator_settings = config.get("services", {}).get("spreadsheet_anki_creator", {})
+    skip_images = creator_settings.get("skip_images", False) if skip_images is None else skip_images
+    skip_tts = creator_settings.get("skip_tts", False) if skip_tts is None else skip_tts
     deck_names = connector.call("deckNames")
     result = ImportResult()
     media_setting = str(
@@ -159,26 +164,32 @@ def create_notes(
 
             result.created += 1
             changed_fields: dict[str, str] = {}
-            try:
-                before = dict(draft.fields)
-                tts_generator.generate_audio_fields(
-                    draft.fields,
-                    model_fields,
-                    connector.store_media_file,
-                    note_id=int(note_id),
-                    identity=identity,
-                )
-                changed_fields.update(
-                    {key: value for key, value in draft.fields.items() if value != before[key]}
-                )
-            except Exception as err:
-                result.failures.append(f"{sheet} row {row_number}: TTS: {err}")
+            if not skip_tts:
+                try:
+                    before = dict(draft.fields)
+                    tts_generator.generate_audio_fields(
+                        draft.fields,
+                        model_fields,
+                        connector.store_media_file,
+                        note_id=int(note_id),
+                        identity=draft.fields.get("Word" if identity == "word" else "Kanji", identity),
+                    )
+                    changed_fields.update(
+                        {key: value for key, value in draft.fields.items() if value != before[key]}
+                    )
+                except Exception as err:
+                    result.failures.append(f"{sheet} row {row_number}: TTS: {err}")
 
             image_field = str(config.get("services", {}).get(
                 "image_generator", {}
             ).get("image_field", config.get("image_field", "Image")))
             prompt = draft.fields.get("ImagePrompt", "").strip()
-            if image_field in model_fields and prompt and not draft.fields.get(image_field, "").strip():
+            if (
+                not skip_images
+                and image_field in model_fields
+                and prompt
+                and not draft.fields.get(image_field, "").strip()
+            ):
                 try:
                     draft.fields[image_field] = image_generator.generate_for_note(
                         prompt, identity, int(note_id), media_dir
@@ -207,6 +218,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--sync", action="store_true", help="Sync Anki after note creation.")
+    parser.add_argument("--skip-images", action="store_true", help="Skip image generation.")
+    parser.add_argument("--skip-tts", action="store_true", help="Skip audio generation.")
     args = parser.parse_args(argv)
     try:
         config = json.loads(args.config.read_text(encoding="utf-8-sig"))
@@ -216,7 +229,14 @@ def main(argv: list[str] | None = None) -> int:
         title, tabs = _read_spreadsheet(args.input, args.spreadsheet_id, credentials)
         rows = _dict_rows(tabs)
         print(f"Spreadsheet: {title}; rows: {len(rows)}")
-        result = create_notes(config, rows, args.config, dry_run=args.dry_run)
+        result = create_notes(
+            config,
+            rows,
+            args.config,
+            dry_run=args.dry_run,
+            skip_images=True if args.skip_images else None,
+            skip_tts=True if args.skip_tts else None,
+        )
         print(
             f"Created: {result.created}; skipped: {result.skipped}; "
             f"errors: {result.failed}."

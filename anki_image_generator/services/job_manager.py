@@ -1,6 +1,8 @@
 """Database queue and history operations for image-generation jobs."""
 from __future__ import annotations
 
+import json
+import os
 import re
 from typing import Any
 
@@ -291,6 +293,61 @@ class JobManager:
 
     def connect(self) -> Any:
         return connect_pgsql(self.config)
+
+    def create_anki_note_job(
+        self, note_id: int, object_type: str, job_type: str = "anki_notes"
+    ) -> int:
+        """Create a processing history row keyed by Anki note ID."""
+        connection = self.connect()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    f'INSERT INTO {self.job_table} '
+                    '("job_type", "object_type", "id", "status", "started_at", "locked_by_task_id") '
+                    'VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP, %s) '
+                    'RETURNING "batch_job_id"',
+                    (job_type, object_type, int(note_id), "processing", os.getpid()),
+                )
+                row = cursor.fetchone()
+            connection.commit()
+            return int(row[0])
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def finish_anki_note_job(
+        self,
+        job_id: int,
+        status: str,
+        result: dict[str, Any] | None = None,
+        response: str | None = None,
+    ) -> None:
+        if status not in {"completed", "error"}:
+            raise ValueError("Anki note job status must be completed or error.")
+        connection = self.connect()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    f'UPDATE {self.job_table} SET "status" = %s, '
+                    '"ended_at" = CURRENT_TIMESTAMP, "result" = %s, "response" = %s '
+                    'WHERE "batch_job_id" = %s',
+                    (
+                        status,
+                        json.dumps(result, ensure_ascii=False) if result is not None else None,
+                        response,
+                        int(job_id),
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise RuntimeError(f"Anki note job {job_id} was not found.")
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
 
     def count_eligible(
         self,

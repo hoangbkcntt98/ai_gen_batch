@@ -126,10 +126,10 @@ class TestTTSGenerator(unittest.TestCase):
             ["Reading", "Reading_Audio"],
             lambda name, data: stored.update({name: data}),
             note_id=7,
-            identity="word",
+            identity="あて",
         )
 
-        self.assertEqual(fields["Reading_Audio"], "[sound:word_7_reading_audio.mp3]")
+        self.assertEqual(fields["Reading_Audio"], "[sound:あて_7.mp3]")
         self.assertEqual(len(stored), 1)
         self.assertEqual(base64.b64decode(next(iter(stored.values()))), b"audio-bytes")
 
@@ -292,6 +292,36 @@ class TestSpreadsheetCreator(unittest.TestCase):
             },
         )
 
+
+    def test_config_can_skip_image_and_tts_generation(self):
+        connector = MagicMock()
+        connector.call.side_effect = [["Deck"], ["Word", "Reading", "ImagePrompt", "Reading_Audio", "Image"]]
+        connector.note_type_for.return_value = "WordModel"
+        connector.deck_for_tags.return_value = "Deck"
+        connector.add_note.return_value = 123
+        config = {
+            "anki_import": {"note_types": {"word": "WordModel"}},
+            "services": {
+                "spreadsheet_anki_creator": {"skip_images": True, "skip_tts": True}
+            },
+        }
+        rows = [("Sheet1", 2, {"Word": "あて", "Tags": "anki;Deck"})]
+
+        with (
+            patch("spreadsheet_anki_creator.AnkiConnector", return_value=connector),
+            patch("spreadsheet_anki_creator.WordGenerator") as word_cls,
+            patch("spreadsheet_anki_creator.TTSGenerator") as tts_cls,
+            patch("spreadsheet_anki_creator.ImageGenerator") as image_cls,
+        ):
+            word_cls.return_value.generate_missing_fields.side_effect = (
+                lambda _row, fields, _names: fields.update({"ImagePrompt": "prompt"})
+            )
+            result = create_notes(config, rows, Path("config.json"))
+
+        self.assertEqual((result.created, result.failed), (1, 0))
+        tts_cls.return_value.generate_audio_fields.assert_not_called()
+        image_cls.return_value.generate_for_note.assert_not_called()
+        connector.update_note_fields.assert_not_called()
 
 SERVICE_TESTS = {
     "anki": TestAnkiConnector,

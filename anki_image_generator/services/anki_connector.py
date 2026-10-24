@@ -90,3 +90,20 @@ class AnkiConnector:
             note_ids = self.call("findNotes", {"query": query})
             counts.append((deck_name, len(note_ids)))
         return counts
+
+    def all_notes(
+        self, chunk_size: int = 200, limit: int | None = None
+    ) -> list[dict[str, Any]]:
+        """Fetch every note with full fields, model name, and deck metadata."""
+        if chunk_size < 1:
+            raise ValueError("chunk_size must be positive.")
+        if limit is not None and limit < 1:
+            raise ValueError("limit must be positive or None.")
+        note_ids = self.call("findNotes", {"query": ""})
+        if limit is not None:
+            note_ids = note_ids[:limit]
+        notes: list[dict[str, Any]] = []
+        for offset in range(0, len(note_ids), chunk_size):
+            chunk = note_ids[offset : offset + chunk_size]
+            notes.extend(self.call("notesInfo", {"notes": chunk}))
+        return notes

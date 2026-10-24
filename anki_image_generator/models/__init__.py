@@ -41,3 +41,9 @@ class ImportResult:
             "failed": self.failed,
             "failures": list(self.failures),
         }
+
+@dataclass
+class AnkiNotesResult:
+    processed: int = 0
+    succeeded: int = 0
+    failed: int = 0
