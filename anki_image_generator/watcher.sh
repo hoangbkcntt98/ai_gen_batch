@@ -46,12 +46,14 @@ remove_pid_if_owner() {
 worker() {
   local script="$1" interval_seconds="$2" python="$3"
   local pid_file="$4" python_pid_file="$5" run_log="$6" watcher_log="$7"
-  shift 7
+  local lock_file="$8"
+  shift 8
   local -a script_args=("$@")
   local child_pid="" exit_code
 
   cd -- "$SCRIPT_DIR" || exit 1
   export PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}"
+  exec 9>"$lock_file"
 
   stop_worker() {
     trap - TERM INT
@@ -60,6 +62,7 @@ worker() {
       wait "$child_pid" 2>/dev/null || true
     fi
     remove_pid_if_owner "$python_pid_file" "$child_pid"
+    flock -u 9 2>/dev/null || true
     printf '%s STOP watcher_pid=%s\n' "$(date -Is)" "$$" >>"$watcher_log"
     remove_pid_if_owner "$pid_file" "$$"
     exit 0
@@ -67,6 +70,16 @@ worker() {
   trap stop_worker TERM INT
 
   while true; do
+    if ! flock -n 9; then
+      printf '%s SKIP reason=lock_held lock=%s\n' "$(date -Is)" "$lock_file" \
+        >>"$watcher_log"
+      sleep "$interval_seconds" &
+      child_pid=$!
+      wait "$child_pid" || true
+      child_pid=""
+      continue
+    fi
+
     printf '%s START command=%q' "$(date -Is)" "$python" >>"$watcher_log"
     printf ' %q' "$script" "${script_args[@]}" >>"$watcher_log"
     printf '\n' >>"$watcher_log"
@@ -79,6 +92,7 @@ worker() {
     remove_pid_if_owner "$python_pid_file" "$child_pid"
     child_pid=""
     printf '%s END exit_code=%s\n' "$(date -Is)" "$exit_code" >>"$watcher_log"
+    flock -u 9
 
     sleep "$interval_seconds" &
     child_pid=$!
@@ -105,6 +119,7 @@ elif [[ "${1:-}" == "status" || "${1:-}" == "pid" || "${1:-}" == "stop" ]]; then
   name="$(safe_name "$target")"
   pid_file="$LOG_DIR/${name}.watcher.pid"
   python_pid_file="$LOG_DIR/${name}.python.pid"
+  lock_file="$LOG_DIR/${name}.lock"
   if [[ ! -f "$pid_file" ]]; then
     echo "Watcher not running for $target."
     exit 1
@@ -134,6 +149,7 @@ elif [[ "${1:-}" == "status" || "${1:-}" == "pid" || "${1:-}" == "stop" ]]; then
     [[ "$action" == "status" ]] || exit 0
     echo "Python log: $LOG_DIR/${name}.log"
     echo "Watcher log: $LOG_DIR/${name}.watcher.log"
+    echo "Lock file: $lock_file"
     exit 0
   fi
   kill -TERM "$pid"
@@ -202,11 +218,16 @@ if [[ -z "$python" ]]; then
   echo "Python interpreter not found; install Python 3 or create .venv." >&2
   exit 1
 fi
+if ! command -v flock >/dev/null 2>&1; then
+  echo "flock is required for per-script run locks." >&2
+  exit 1
+fi
 
 mkdir -p -- "$LOG_DIR"
 name="$(safe_name "$script")"
 pid_file="$LOG_DIR/${name}.watcher.pid"
 python_pid_file="$LOG_DIR/${name}.python.pid"
+lock_file="$LOG_DIR/${name}.lock"
 run_log="$LOG_DIR/${name}.log"
 watcher_log="$LOG_DIR/${name}.watcher.log"
 if [[ -f "$pid_file" ]]; then
@@ -220,7 +241,8 @@ fi
 
 nohup bash "$SELF" --worker \
   "$script" "$interval_seconds" "$python" \
-  "$pid_file" "$python_pid_file" "$run_log" "$watcher_log" "${script_args[@]}" \
+  "$pid_file" "$python_pid_file" "$run_log" "$watcher_log" "$lock_file" \
+  "${script_args[@]}" \
   </dev/null >/dev/null 2>&1 &
 watcher_pid=$!
 printf '%s\n' "$watcher_pid" >"$pid_file"
@@ -233,5 +255,6 @@ fi
 echo "Started watcher for $script: PID $watcher_pid"
 echo "Interval: ${interval_seconds}s after each run completes"
 echo "PID file: $pid_file"
+echo "Lock file: $lock_file"
 echo "Python log: $run_log"
 echo "Watcher log: $watcher_log"

@@ -273,7 +273,9 @@ finishes. It does not overlap runs. Interval accepts seconds (`60s`), minutes
 `batch_logs/anki_notes.watcher.pid`. The active Python child PID is stored in
 `batch_logs/anki_notes.python.pid`. The watcher runs from the project root and
 adds that root to `PYTHONPATH`, so scripts under `batch/` can import
-`helpers`, `services`, and `models`. Add script arguments after `--`.
+`helpers`, `services`, and `models`. A per-script `batch_logs/{filename}.lock`
+uses an OS file lock to prevent overlapping runs; a locked run is logged as
+`SKIP` and retried after the next interval. Add script arguments after `--`.
 
 From this folder:
 
