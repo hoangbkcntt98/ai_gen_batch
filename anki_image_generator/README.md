@@ -191,6 +191,26 @@ python test_services.py word
 
 Equivalent unittest discovery: `python -m unittest discover -s tests -v`.
 
+## Create Anki notes from a spreadsheet
+
+`spreadsheet_anki_creator.py` reads CSV/TSV exports or Google Sheets, maps
+`Word`/`Kanji` rows and `Tags` to configured note types/decks, generates missing
+text fields, creates the note, then fills missing audio and image fields.
+Configure `anki_import.note_types`, Chat/TTS/Image API settings, and
+`batch.image_generate.media_dir` in `config.json`.
+
+```bash
+python spreadsheet_anki_creator.py --input spreadsheet_export.txt --dry-run
+python spreadsheet_anki_creator.py --input spreadsheet_export.txt --sync
+python spreadsheet_anki_creator.py --spreadsheet-id YOUR_SHEET_ID --sync
+python spreadsheet_anki_creator.py --input "https://docs.google.com/spreadsheets/d/YOUR_SHEET_ID/edit" --dry-run
+```
+
+Google Sheets reads use `account_service.json` beside the config by default;
+override with `--credentials`. Dry-run reads rows and queries Anki metadata but
+does not generate content, create notes, or sync. `--sync` syncs after note and
+media updates complete.
+
 For local storage, run `python setting_image_to_notes.py` to rename completed
 image files and update their `result` values. Local directory comes from
 `batch.image_generate.image_base_path` when set, otherwise `media_dir`. The

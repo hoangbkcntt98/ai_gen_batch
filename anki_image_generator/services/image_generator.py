@@ -20,13 +20,13 @@ try:
     from services.job_manager import (
         _identifier, _qualified_table, table_for_object_type, table_names, JobManager,
     )
-    from image_validation import validate_image_data
+    from helpers.image_validation import validate_image_data
 except ImportError:
     from ..models import ImageJob
     from .job_manager import (
         _identifier, _qualified_table, table_for_object_type, table_names, JobManager,
     )
-    from ..image_validation import validate_image_data
+    from ..helpers.image_validation import validate_image_data
 
 _DRIVE_AUTH_LOCK = threading.Lock()
 
@@ -273,6 +273,28 @@ class ImageGenerator:
 
     def process(self, job: ImageJob, media_dir: Path) -> tuple[str, str]:
         return process_job(job, self.config, table_names(self.config), media_dir, self.config_path)
+
+    def generate_for_note(
+        self,
+        prompt: str,
+        identity: str,
+        note_id: int,
+        media_dir: Path,
+    ) -> str:
+        """Generate and store one image outside PostgreSQL batch queue."""
+        provider, image_base_path = _image_provider(self.config)
+        data, extension = request_image(prompt, self.config)
+        filename = _filename(identity, note_id, extension)
+        location = _store_image(
+            provider,
+            image_base_path,
+            filename,
+            data,
+            media_dir,
+            self.config_path,
+            self.config,
+        )
+        return _image_tag(location)
 
     def run(
         self, media_dir: Path, limit: int | None = None, dry_run: bool = False,

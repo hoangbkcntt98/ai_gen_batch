@@ -5,6 +5,7 @@ import json
 import sys
 import types
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from services.anki_connector import AnkiConnector
@@ -13,6 +14,12 @@ from services.image_generator import ImageGenerator, _filename, request_image
 from services.job_manager import JobManager, _identifier, table_for_object_type
 from services.tts_generator import TTSGenerator
 from services.word_generator import WordGenerator, build_image_prompt, generation_plan
+from spreadsheet_anki_creator import (
+    _dict_rows,
+    _note_fields,
+    _read_spreadsheet,
+    create_notes,
+)
 
 
 class TestAnkiConnector(unittest.TestCase):
@@ -151,6 +158,67 @@ class TestWordGenerator(unittest.TestCase):
         self.assertEqual(fields, {"Reading": "あて", "MeaningDestination": "to guess"})
 
 
+class TestSpreadsheetCreator(unittest.TestCase):
+    def test_input_accepts_google_sheets_url(self):
+        with patch.object(GoogleSheetsService, "read_spreadsheet", return_value=("Sheet", [])) as read:
+            title, tabs = _read_spreadsheet(
+                "https://docs.google.com/spreadsheets/d/sheet-id/edit?usp=sharing",
+                None,
+                Path("account_service.json"),
+            )
+        self.assertEqual((title, tabs), ("Sheet", []))
+        read.assert_called_once_with("sheet-id")
+
+    def test_maps_sheet_rows_and_field_aliases(self):
+        rows = _dict_rows([("Sheet1", [
+            ["Word", "Meaning_Source", "Tags"],
+            ["あて", "guess", "anki;Deck"],
+        ])])
+        self.assertEqual(rows[0][2]["Word"], "あて")
+        fields = _note_fields(rows[0][2], ["Word", "MeaningSource"])
+        self.assertEqual(fields, {"Word": "あて", "MeaningSource": "guess"})
+
+    def test_runs_generators_and_updates_new_note(self):
+        connector = MagicMock()
+        connector.call.side_effect = [["Deck"], ["Word", "Reading", "ImagePrompt", "Reading_Audio", "Image"]]
+        connector.note_type_for.return_value = "WordModel"
+        connector.deck_for_tags.return_value = "Deck"
+        connector.add_note.return_value = 123
+        config = {
+            "anki_import": {"note_types": {"word": "WordModel"}},
+            "batch": {"image_generate": {"media_dir": ""}},
+        }
+        rows = [("Sheet1", 2, {"Word": "あて", "Tags": "anki;Deck"})]
+
+        with (
+            patch("spreadsheet_anki_creator.AnkiConnector", return_value=connector),
+            patch("spreadsheet_anki_creator.WordGenerator") as word_cls,
+            patch("spreadsheet_anki_creator.TTSGenerator") as tts_cls,
+            patch("spreadsheet_anki_creator.ImageGenerator") as image_cls,
+        ):
+            word_cls.return_value.generate_missing_fields.side_effect = (
+                lambda row, fields, names: fields.update({"ImagePrompt": "prompt"})
+            )
+            tts_cls.return_value.generate_audio_fields.side_effect = (
+                lambda fields, names, store, **kwargs: fields.update(
+                    {"Reading_Audio": "[sound:word_123_reading_audio.mp3]"}
+                )
+            )
+            image_cls.return_value.generate_for_note.return_value = '<img src="word_123.png">'
+
+            result = create_notes(config, rows, Path("config.json"))
+
+        self.assertEqual(result.created, 1)
+        self.assertEqual(result.failed, 0)
+        connector.update_note_fields.assert_called_once_with(
+            123,
+            {
+                "Reading_Audio": "[sound:word_123_reading_audio.mp3]",
+                "Image": '<img src="word_123.png">',
+            },
+        )
+
+
 SERVICE_TESTS = {
     "anki": TestAnkiConnector,
     "google": TestGoogleSheetsService,
@@ -158,6 +226,7 @@ SERVICE_TESTS = {
     "jobs": TestJobManager,
     "tts": TestTTSGenerator,
     "word": TestWordGenerator,
+    "creator": TestSpreadsheetCreator,
 }
 
 
