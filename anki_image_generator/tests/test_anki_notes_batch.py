@@ -110,6 +110,56 @@ class TestAnkiNotesBatch(unittest.TestCase):
 
         connector.all_notes.assert_called_once_with()
 
+    def test_sync_is_disabled_by_default(self):
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch("batch.anki_notes.AnkiConnector") as connector_cls,
+            patch("batch.anki_notes.JobManager"),
+            patch("batch.anki_notes.WordGenerator"),
+            patch("batch.anki_notes.ImageGenerator"),
+            patch("batch.anki_notes.TTSGenerator"),
+            patch("batch.anki_notes.log"),
+        ):
+            connector = connector_cls.return_value
+            connector.all_notes.return_value = []
+            batch = AnkiNotesBatch({}, Path(tmp) / "config.json")
+
+            batch.process()
+
+        connector.sync.assert_not_called()
+
+    def test_sync_before_and_after_can_be_enabled_independently(self):
+        for settings, expected_calls in (
+            ({"sync_before_processing": True}, 1),
+            ({"sync_after_processing": True}, 1),
+            (
+                {
+                    "sync_before_processing": True,
+                    "sync_after_processing": True,
+                },
+                2,
+            ),
+        ):
+            with (
+                tempfile.TemporaryDirectory() as tmp,
+                patch("batch.anki_notes.AnkiConnector") as connector_cls,
+                patch("batch.anki_notes.JobManager"),
+                patch("batch.anki_notes.WordGenerator"),
+                patch("batch.anki_notes.ImageGenerator"),
+                patch("batch.anki_notes.TTSGenerator"),
+                patch("batch.anki_notes.log"),
+            ):
+                connector = connector_cls.return_value
+                connector.all_notes.return_value = []
+                batch = AnkiNotesBatch(
+                    {"services": {"anki_notes": settings}},
+                    Path(tmp) / "config.json",
+                )
+
+                batch.process()
+
+            self.assertEqual(connector.sync.call_count, expected_calls)
+
     def test_limit_counts_only_notes_with_field_changes(self):
         complete_note = {
             "noteId": 20,
@@ -132,7 +182,6 @@ class TestAnkiNotesBatch(unittest.TestCase):
         ):
             connector = connector_cls.return_value
             connector.all_notes.return_value = [complete_note, incomplete_note]
-            connector.sync.return_value = None
 
             def fill_missing(row, fields, _model_fields):
                 if row["Word"] == "未知":
@@ -150,7 +199,7 @@ class TestAnkiNotesBatch(unittest.TestCase):
         jobs_cls.return_value.try_start_anki_note_job.assert_called_once_with(
             21, "WordModel", "anki_notes"
         )
-        self.assertEqual(connector.sync.call_count, 2)
+        connector.sync.assert_not_called()
 
     def test_failure_is_recorded_and_processing_continues(self):
         note = {

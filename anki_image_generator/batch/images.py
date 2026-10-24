@@ -45,7 +45,10 @@ class ImagesBatch:
         return path.resolve()
 
     def process(
-        self, limit: int | None = None, step: int | None = None
+        self,
+        limit: int | None = None,
+        step: int | None = None,
+        skip_sync: bool = False,
     ) -> dict[str, int]:
         limit = self.settings.get("limit") if limit is None else limit
         step = self.settings.get("step", 10) if step is None else step
@@ -58,7 +61,8 @@ class ImagesBatch:
 
         image_field = str(self.settings.get("image_field", "Image")).strip() or "Image"
         candidates: list[dict[str, Any]] = []
-        self.connector.sync()
+        if not skip_sync:
+            self.connector.sync()
         notes = self.connector.all_notes()
         skipped_no_prompt = 0
         skipped_no_identity = 0
@@ -147,7 +151,8 @@ class ImagesBatch:
                             f"note={note_id} item={identity!r} status=error error={err}",
                             "ERROR",
                         )
-                self.connector.sync()
+                if not skip_sync:
+                    self.connector.sync()
                 log(
                     "images",
                     self.log_dir,
@@ -156,7 +161,8 @@ class ImagesBatch:
                 )
         except Exception:
             # Preserve any images completed before a batch-level failure.
-            self.connector.sync()
+            if not skip_sync:
+                self.connector.sync()
             raise
 
         return {
@@ -181,12 +187,19 @@ def main(argv: list[str] | None = None) -> int:
         "--step", type=int, default=None,
         help="Images per chunk; defaults to services.image_generator.step.",
     )
+    parser.add_argument(
+        "--skip-sync",
+        action="store_true",
+        help="Skip Anki sync before scanning and after each image batch.",
+    )
     args = parser.parse_args(argv)
     try:
         config = json.loads(args.config.read_text(encoding="utf-8-sig"))
         if not isinstance(config, dict):
             raise ValueError("Config must be a JSON object.")
-        result = ImagesBatch(config, args.config).process(args.limit, args.step)
+        result = ImagesBatch(config, args.config).process(
+            args.limit, args.step, skip_sync=args.skip_sync
+        )
         print(
             f"Scanned: {result['scanned']}; candidates: {result['candidates']}; "
             f"selected: {result['selected']}; processed: {result['processed']}; "

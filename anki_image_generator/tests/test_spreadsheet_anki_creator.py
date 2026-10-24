@@ -100,8 +100,7 @@ class TestSpreadsheetStatusFilter(unittest.TestCase):
 
 
 class TestDuplicateDeckLabel(unittest.TestCase):
-    def test_duplicate_gets_deck_suffix_after_word_generation(self):
-        captured_generator_fields = []
+    def test_duplicate_word_is_skipped_without_deck_suffix_or_generation(self):
         with (
             patch("spreadsheet_anki_creator.AnkiConnector") as connector_cls,
             patch("spreadsheet_anki_creator.WordGenerator") as word_cls,
@@ -112,13 +111,7 @@ class TestDuplicateDeckLabel(unittest.TestCase):
             connector.call.side_effect = [["DeckA"], ["Word", "Reading"]]
             connector.note_type_for.return_value = "WordModel"
             connector.deck_for_tags.return_value = "DeckA"
-            connector.has_note_field_value.side_effect = [True, False]
-            connector.add_note.return_value = 123
-            word_cls.return_value.generate_missing_fields.side_effect = (
-                lambda _row, fields, *_args, **_kwargs: captured_generator_fields.append(
-                    dict(fields)
-                )
-            )
+            connector.has_note_field_value.return_value = True
 
             result = create_notes(
                 {"anki_import": {"note_types": {"word": "WordModel"}}},
@@ -128,14 +121,12 @@ class TestDuplicateDeckLabel(unittest.TestCase):
                 skip_tts=True,
             )
 
-        self.assertEqual(result.created, 1)
-        self.assertEqual(captured_generator_fields[0]["Word"], "語")
-        added_fields = connector.add_note.call_args.args[2]
-        self.assertEqual(added_fields["Word"], "語 (DeckA)")
-        self.assertEqual(
-            connector.has_note_field_value.call_args_list[1].args,
-            ("WordModel", "Word", "語 (DeckA)"),
+        self.assertEqual((result.created, result.skipped), (0, 1))
+        connector.has_note_field_value.assert_called_once_with(
+            "WordModel", "Word", "語"
         )
+        connector.add_note.assert_not_called()
+        word_cls.return_value.generate_missing_fields.assert_not_called()
 
 
 if __name__ == "__main__":

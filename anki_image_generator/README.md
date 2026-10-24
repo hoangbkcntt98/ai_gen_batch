@@ -106,6 +106,10 @@ Skip image creation while still filling other fields and audio:
 python -m batch.anki_notes --skip-images
 ```
 
+Anki sync before and after this batch is disabled by default. Enable either
+point independently under `services.anki_notes` in `config.json`:
+`sync_before_processing` and `sync_after_processing`.
+
 Generate images for existing notes with blank `Image` and non-empty
 `ImagePrompt`:
 
@@ -133,6 +137,37 @@ Override interval with `--interval`, for example `--interval 60s` or
 go to `batch_logs/{name}.watcher.log`. The watcher uses a per-script
 `batch_logs/{name}.lock` to prevent overlapping runs. Use `--` before script
 arguments that could be confused with watcher options.
+
+Run AnkiWeb sync every 5 minutes, with a 30-minute timeout per sync:
+
+```bash
+./watcher.sh start helpers/sync_ankiweb_to_local.py --interval 5m --timeout 1800
+./watcher.sh status helpers/sync_ankiweb_to_local.py
+./watcher.sh stop helpers/sync_ankiweb_to_local.py
+```
+
+The 5-minute interval starts after each sync finishes. The sync watcher lock is
+`batch_logs/sync_ankiweb_to_local.lock`. Do not run `./anki_sync.sh` or another
+sync command at the same time; those commands do not use this watcher lock.
+
+## My WorKFlow
+
+Start each watcher once. Replace `GOOGLE_SHEETS_URL` with the source URL; use
+`--input path/to/file.csv` for a CSV/TSV file instead:
+
+```bash
+./watcher.sh start spreadsheet_anki_creator.py --interval 5m --input "GOOGLE_SHEETS_URL" --skip-images --skip-tts --defer-word-generation
+./watcher.sh start batch/anki_notes.py --interval 5m --identity word --skip-images --skip-sync
+./watcher.sh start batch/images.py --interval 5m --skip-sync
+./watcher.sh start helpers/sync_ankiweb_to_local.py --interval 5m --timeout 1800
+```
+
+Spreadsheet watcher creates new Word notes without AI field generation, image,
+audio, or sync. `anki_notes.py` fills missing Word fields and audio, but skips
+images and sync. `images.py` generates images without syncing; the separate
+AnkiWeb watcher handles sync. Each watcher has its own lock and waits 5 minutes
+after its job finishes before next run. Check or stop each watcher with
+`./watcher.sh status SCRIPT.py` or `./watcher.sh stop SCRIPT.py`.
 
 ## Media and logs
 

@@ -58,7 +58,9 @@
     "anki_notes": {
       "job_type": "anki_notes",
       "log_dir": "batch_logs",
-      "limit": null
+      "limit": null,
+      "sync_before_processing": false,
+      "sync_after_processing": false
     }
   },
   "anki_import": {

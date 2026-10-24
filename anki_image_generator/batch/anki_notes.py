@@ -49,7 +49,11 @@ class AnkiNotesBatch:
         raise ValueError(f"Note {note.get('noteId')} has no non-empty Word or Kanji field.")
 
     def process(
-        self, limit: int | None = None, skip_images: bool = False
+        self,
+        limit: int | None = None,
+        skip_images: bool = False,
+        identity_filter: str | None = None,
+        skip_sync: bool = False,
     ) -> AnkiNotesResult:
         """Select notes needing work, then process selected note IDs."""
         selected_limit = self.default_limit if limit is None else limit
@@ -61,7 +65,8 @@ class AnkiNotesBatch:
         result = AnkiNotesResult()
         job_type = str(self.settings.get("job_type", "anki_notes")).strip() or "anki_notes"
 
-        self.connector.sync()
+        if not skip_sync and self.settings.get("sync_before_processing", False) is True:
+            self.connector.sync()
         try:
             notes = self.connector.all_notes()
             notes_by_id: dict[int, dict[str, Any]] = {}
@@ -81,6 +86,8 @@ class AnkiNotesBatch:
                 display = fields.get("Word", "").strip() or fields.get("Kanji", "").strip() or "?"
                 try:
                     identity_field, identity_value = self._identity(note, fields)
+                    if identity_filter and identity_field.lower() != identity_filter:
+                        continue
                     model_fields = list(fields)
                     row = {identity_field: identity_value, **fields}
                     chat_fields, prompt_fields, tool_fields = generation_plan(
@@ -261,7 +268,8 @@ class AnkiNotesBatch:
                         "ERROR",
                     )
         finally:
-            self.connector.sync()
+            if not skip_sync and self.settings.get("sync_after_processing", False) is True:
+                self.connector.sync()
         return result
 
 
@@ -281,13 +289,26 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Skip image generation; still generate other missing fields and audio.",
     )
+    parser.add_argument(
+        "--identity",
+        choices=("word", "kanji"),
+        help="Process only notes with this identity field.",
+    )
+    parser.add_argument(
+        "--skip-sync",
+        action="store_true",
+        help="Skip configured Anki sync before and after processing.",
+    )
     args = parser.parse_args(argv)
     try:
         config = json.loads(args.config.read_text(encoding="utf-8-sig"))
         if not isinstance(config, dict):
             raise ValueError("Config must be a JSON object.")
         result = AnkiNotesBatch(config, args.config).process(
-            limit=args.limit, skip_images=args.skip_images
+            limit=args.limit,
+            skip_images=args.skip_images,
+            identity_filter=args.identity,
+            skip_sync=args.skip_sync,
         )
         print(
             f"Processed: {result.processed}; succeeded: {result.succeeded}; "
