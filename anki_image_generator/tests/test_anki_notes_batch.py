@@ -30,6 +30,46 @@ class TestAnkiConnectorNotes(unittest.TestCase):
 
 
 class TestAnkiNotesBatch(unittest.TestCase):
+    def test_skip_images_skips_generation_but_processes_other_fields(self):
+        note = {
+            "noteId": 15,
+            "modelName": "WordModel",
+            "fields": {
+                "Word": {"value": "未知"},
+                "Reading": {"value": ""},
+                "ImagePrompt": {"value": "draw this"},
+                "Image": {"value": ""},
+                "Reading_Audio": {"value": ""},
+            },
+        }
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch("batch.anki_notes.AnkiConnector") as connector_cls,
+            patch("batch.anki_notes.JobManager") as jobs_cls,
+            patch("batch.anki_notes.WordGenerator") as word_cls,
+            patch("batch.anki_notes.ImageGenerator") as image_cls,
+            patch("batch.anki_notes.TTSGenerator") as tts_cls,
+            patch("batch.anki_notes.log"),
+        ):
+            connector = connector_cls.return_value
+            connector.all_notes.return_value = [note]
+            jobs_cls.return_value.try_start_anki_note_job.return_value = 103
+            word_cls.return_value.generate_missing_fields.side_effect = (
+                lambda _row, fields, _model_fields: fields.update(Reading="みち")
+            )
+            tts_cls.return_value.generate_audio_fields.return_value = None
+            batch = AnkiNotesBatch(
+                {"anki_import": {"note_types": {"word": "WordModel"}}},
+                Path(tmp) / "config.json",
+            )
+
+            result = batch.process(skip_images=True)
+
+        image_cls.return_value.generate_for_note.assert_not_called()
+        self.assertEqual((result.processed, result.failed), (1, 0))
+        connector.update_note_fields.assert_called_once()
+        self.assertEqual(connector.update_note_fields.call_args.args[1], {"Reading": "みち"})
+
     def test_process_uses_runtime_limit(self):
         with (
             tempfile.TemporaryDirectory() as tmp,

@@ -2,7 +2,37 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 
-from spreadsheet_anki_creator import create_notes
+from spreadsheet_anki_creator import _read_inputs, create_notes
+
+
+class TestMultipleInputs(unittest.TestCase):
+    def test_reads_and_combines_files_and_spreadsheet_ids_in_order(self):
+        first = ("words.csv", [("words", [["Word"], ["語"]])])
+        second = ("sheet", [("Tab1", [["Kanji"], ["字"]])])
+        with patch(
+            "spreadsheet_anki_creator._read_spreadsheet",
+            side_effect=[first, second],
+        ) as read_source:
+            title, tabs = _read_inputs(
+                ["words.csv"],
+                ["sheet-id"],
+                Path("account_service.json"),
+            )
+
+        self.assertEqual(title, "words.csv, sheet")
+        self.assertEqual(tabs, [*first[1], *second[1]])
+        self.assertEqual(
+            read_source.call_args_list[0].args,
+            ("words.csv", None, Path("account_service.json")),
+        )
+        self.assertEqual(
+            read_source.call_args_list[1].args,
+            (None, "sheet-id", Path("account_service.json")),
+        )
+
+    def test_requires_at_least_one_input(self):
+        with self.assertRaisesRegex(ValueError, "at least one"):
+            _read_inputs([], [], Path("account_service.json"))
 
 
 class TestSpreadsheetStatusFilter(unittest.TestCase):

@@ -332,14 +332,21 @@ class TestWordGenerator(unittest.TestCase):
             "Kanji": "良",
             "MeaningJP": "よい",
             "MeaningVI": "tốt",
+            "Mnemonic": "",
             "ImagePrompt": "",
         }
         response = MagicMock()
         response.status_code = 200
         response.json.return_value = {
-            "choices": [{"message": {"content": "{}"}}]
+            "choices": [{
+                "message": {
+                    "content": '{"Mnemonic":"Gợi nhớ","ImagePrompt":"AI format khác"}'
+                }
+            }]
         }
-        with patch("services.word_generator.requests.post", return_value=response):
+        with patch(
+            "services.word_generator.requests.post", return_value=response
+        ) as post:
             generate_missing_fields(
                 {"Kanji": "良"},
                 fields,
@@ -349,6 +356,9 @@ class TestWordGenerator(unittest.TestCase):
                     "chat_model": "test",
                 }}},
             )
+        request_content = post.call_args.kwargs["json"]["messages"][1]["content"]
+        self.assertNotIn("ImagePrompt", request_content)
+        self.assertEqual(fields["Mnemonic"], "Gợi nhớ")
         self.assertEqual(fields["ImagePrompt"], build_image_prompt("良", "tốt"))
 
     def test_translates_existing_word_example_without_creating_source(self):
@@ -504,6 +514,55 @@ class TestWordGenerator(unittest.TestCase):
             )
         self.assertEqual(fields["Example1_JP"], "彼は毎日生きている。")
         self.assertEqual(fields["Example1_VN"], "Anh ấy sống mỗi ngày.")
+
+    def test_new_kanji_note_can_add_vocabulary_and_matching_example(self):
+        fields = {
+            "Kanji": "生",
+            "MeaningJP": "いきる",
+            "RequiredVocabulary": "生きる",
+            "Vocabulary1_JP": "生きる（いきる）",
+            "Vocabulary1_VN": "sống",
+            "Vocabulary2_JP": "",
+            "Vocabulary2_VN": "",
+            "Example1_JP": "",
+            "Example1_VN": "",
+            "Example2_JP": "",
+            "Example2_VN": "",
+        }
+        response = MagicMock()
+        response.status_code = 200
+        response.text = ""
+        response.json.return_value = {
+            "choices": [{
+                "message": {
+                    "content": (
+                        '{"Vocabulary2_JP":"学生（がくせい）",'
+                        '"Example1_JP":"彼は毎日生きている。",'
+                        '"Example1_VN":"Anh ấy sống mỗi ngày.",'
+                        '"Example2_JP":"学生が勉強している。",'
+                        '"Example2_VN":"Học sinh đang học."}'
+                    )
+                }
+            }]
+        }
+        config = {"services": {"word_generator": {
+            "chat_api_base": "http://chat/v1", "chat_model": "test"
+        }}}
+        with patch("services.word_generator.requests.post", return_value=response) as post:
+            generate_missing_fields(
+                {"Kanji": "生", "RequiredVocabulary": "生きる"},
+                fields,
+                list(fields),
+                config,
+                allow_new_examples=True,
+            )
+
+        self.assertEqual(fields["Vocabulary2_JP"], "学生（がくせい）")
+        self.assertEqual(fields["Example2_JP"], "学生が勉強している。")
+        requested = post.call_args.kwargs["json"]["messages"][1]["content"]
+        self.assertIn("cover every standard on-yomi and kun-yomi reading", requested)
+        self.assertIn("exactly one complete ExampleN_JP/ExampleN_VN pair", requested)
+        self.assertNotIn("do not create VocabularyN_JP for N > 1", requested)
 
     def test_kanji_vocabulary_destination_requires_source(self):
         fields = {

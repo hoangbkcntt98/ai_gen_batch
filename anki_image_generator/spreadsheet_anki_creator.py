@@ -61,6 +61,25 @@ def _read_spreadsheet(
     return GoogleSheetsService(credentials_path).read_spreadsheet(str(spreadsheet_id))
 
 
+def _read_inputs(
+    input_paths: list[str],
+    spreadsheet_ids: list[str],
+    credentials_path: Path,
+) -> tuple[str, list[tuple[str, list[list[str]]]]]:
+    titles: list[str] = []
+    tabs: list[tuple[str, list[list[str]]]] = []
+    for input_path in input_paths:
+        title, source_tabs = _read_spreadsheet(input_path, None, credentials_path)
+        titles.append(title)
+        tabs.extend(source_tabs)
+    for spreadsheet_id in spreadsheet_ids:
+        title, source_tabs = _read_spreadsheet(None, spreadsheet_id, credentials_path)
+        titles.append(title)
+        tabs.extend(source_tabs)
+    if not titles:
+        raise ValueError("Provide at least one --input or --spreadsheet-id.")
+    return ", ".join(titles), tabs
+
 def _dict_rows(
     tabs: list[tuple[str, list[list[str]]]],
 ) -> list[tuple[str, int, dict[str, str]]]:
@@ -232,8 +251,20 @@ def create_notes(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=Path(__file__).with_name("config.json"))
-    parser.add_argument("--input", help="CSV/TSV file or Google Sheets URL.")
-    parser.add_argument("--spreadsheet-id", help="Read spreadsheet through Google Sheets API.")
+    parser.add_argument(
+        "--input",
+        action="append",
+        nargs="+",
+        metavar="SOURCE",
+        help="CSV/TSV file or Google Sheets URL; repeat or pass multiple sources.",
+    )
+    parser.add_argument(
+        "--spreadsheet-id",
+        action="append",
+        nargs="+",
+        metavar="ID",
+        help="Google Sheets ID; repeat or pass multiple IDs.",
+    )
     parser.add_argument(
         "--credentials",
         type=Path,
@@ -249,7 +280,11 @@ def main(argv: list[str] | None = None) -> int:
         if not isinstance(config, dict):
             raise ValueError("Config must be a JSON object.")
         credentials = args.credentials or args.config.resolve().parent / "account_service.json"
-        title, tabs = _read_spreadsheet(args.input, args.spreadsheet_id, credentials)
+        input_paths = [value for group in (args.input or []) for value in group]
+        spreadsheet_ids = [
+            value for group in (args.spreadsheet_id or []) for value in group
+        ]
+        title, tabs = _read_inputs(input_paths, spreadsheet_ids, credentials)
         rows = _dict_rows(tabs)
         print(f"Spreadsheet: {title}; rows: {len(rows)}")
         result = create_notes(

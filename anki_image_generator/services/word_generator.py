@@ -24,7 +24,7 @@ WORD_CHAT_FIELDS = {
 }
 KANJI_CHAT_FIELDS = {
     "RequiredVocabulary", "MeaningJP", "MeaningVI", "OnYomi", "KunYomi",
-    "Radical", "RadicalName", "RadicalMeaning", "PhoneticPart", "Mnemonic", "ImagePrompt",
+    "Radical", "RadicalName", "RadicalMeaning", "PhoneticPart", "Mnemonic",
     "RelatedKanji", "Notes", "Chinese",
     *(f"Example{index}_{language}" for index in range(1, 7) for language in ("JP", "VN")),
     *(f"Vocabulary{index}_{language}" for index in range(1, 7) for language in ("JP", "VN")),
@@ -183,14 +183,26 @@ def _generate_schema_fields(
             )
             + "Tuân theo chính xác các field ví dụ/từ vựng được yêu cầu; không tự thêm key hay cặp khác. "
         )
+        kanji_coverage_rule = (
+            " Với Kanji mới, chọn đủ mục VocabularyN_JP để cover mọi cách đọc On-yomi "
+            "và Kun-yomi chuẩn, dùng ít mục nhất nhưng không bỏ sót cách đọc. "
+            "Nếu có RequiredVocabulary, giữ nguyên từ đó ở Vocabulary1_JP rồi thêm từ "
+            "vựng khác khi cần. Tạo chính xác một cặp ExampleN_JP/ExampleN_VN cho mỗi "
+            "VocabularyN_JP đã chọn, dùng cùng số N; câu tiếng Nhật phải chứa đúng từ "
+            "vựng tương ứng. Không tạo example nếu không có từ vựng tương ứng và ngược lại. "
+            "Chỉ dùng field có sẵn từ 1 đến 6."
+            if allow_new_examples else ""
+        )
         prompt += (
-            "\nMODE kanji: Phân tích đúng một chữ Kanji trong value. Tạo số từ vựng tối thiểu "
-            "để đại diện cách đọc On/Kun thông dụng, tối đa 6 cặp. Nếu required_vocabulary "
+            "\nMODE kanji: Phân tích đúng một chữ Kanji trong value. Tạo đủ từ vựng để "
+            "cover cách đọc On/Kun chuẩn, dùng ít từ nhất; schema có tối đa 6 slot "
+            "từ vựng và 6 slot ví dụ. Nếu required_vocabulary "
             "không rỗng, ghi chính xác từ đó vào Vocabulary1_JP, kèm cách đọc trong ngoặc "
             "và nghĩa tiếng Việt ở Vocabulary1_VN; không thay bằng từ khác. Chỉ điền "
-            "VocabularyN_VN khi VocabularyN_JP có dữ liệu. Nếu Vocabulary1_JP đã có dữ liệu, "
-            "không tự tạo VocabularyN_JP với N > 1; chỉ dịch VocabularyN_JP đã có. Ví dụ dùng từ vựng "
-            f"đã chọn, phù hợp user_level. {example_rule}"
+            "VocabularyN_VN khi VocabularyN_JP có dữ liệu. "
+            f"{'Nếu Vocabulary1_JP đã có dữ liệu, không tự tạo VocabularyN_JP với N > 1; chỉ dịch VocabularyN_JP đã có. ' if not allow_new_examples else ''}"
+            "Ví dụ dùng từ vựng "
+            f"đã chọn, phù hợp user_level. {example_rule}{kanji_coverage_rule}"
             "Chinese là âm Hán Việt IN HOA; nhiều âm ngăn cách bằng ・. Mnemonic ngắn, "
             "dựa trên cấu trúc chữ; không bịa nguồn gốc Kanji. Ghi required_vocabulary nguyên dạng "
             "vào RequiredVocabulary. ImagePrompt không tạo ở lượt này, luôn trả ImagePrompt là chuỗi rỗng.\n"
@@ -254,6 +266,10 @@ def _should_generate_paired_field(
             return True
         return part == "Destination" and bool(
             fields.get(f"Example{number}_Source", "").strip()
+        )
+    if allow_new_examples and pair_type == "Vocabulary":
+        return part == "JP" or (
+            part == "VN" and bool(fields.get(f"Vocabulary{number}_JP", "").strip())
         )
     if pair_type == "Example":
         if allow_new_examples:
@@ -404,6 +420,17 @@ def generate_missing_fields(
                 "Only translate existing source/JP examples; do not create source examples. "
             )
         )
+        kanji_coverage_rule = (
+            "For a new Kanji note, choose enough VocabularyN_JP entries to cover every "
+            "standard on-yomi and kun-yomi reading; use the fewest entries that achieve "
+            "coverage. If RequiredVocabulary is supplied, keep it as Vocabulary1_JP "
+            "and add further vocabulary entries when needed. Create exactly one complete "
+            "ExampleN_JP/ExampleN_VN pair for each selected VocabularyN_JP, using the "
+            "same index; each Japanese example must contain its matching vocabulary. "
+            "Do not create examples without matching vocabulary or vocabulary without "
+            "a matching example. Use only available numbered fields (1-6). "
+            if identity == "Kanji" and allow_new_examples else ""
+        )
         payload = {
             "model": model,
             "messages": [
@@ -419,9 +446,13 @@ def generate_missing_fields(
                         f"Field descriptions: {json.dumps({key: descriptions.get(key, key) for key in missing}, ensure_ascii=False)}. "
                         "Use accurate, natural, concise learning content. Fill destination/translation fields "
                         "only when their matching source field has a value; never create a destination "
-                        f"for an empty source. {example_prompt_rule}"
-                        "If Vocabulary1_JP already has a value, do not create "
-                        "VocabularyN_JP for N > 1 while filling missing fields. Translate matching example pairs; "
+                        f"for an empty source. {example_prompt_rule}{kanji_coverage_rule}"
+                        + (
+                            "If Vocabulary1_JP already has a value, do not create "
+                            "VocabularyN_JP for N > 1 while filling existing fields. "
+                            if not allow_new_examples else ""
+                        )
+                        + "Translate matching example pairs; "
                         "do not replace supplied values. Use empty string only when genuinely inapplicable.\n"
                         f"Context: {json.dumps(context, ensure_ascii=False)}"
                     ),

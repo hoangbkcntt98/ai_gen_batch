@@ -48,7 +48,9 @@ class AnkiNotesBatch:
                     return field, value
         raise ValueError(f"Note {note.get('noteId')} has no non-empty Word or Kanji field.")
 
-    def process(self, limit: int | None = None) -> AnkiNotesResult:
+    def process(
+        self, limit: int | None = None, skip_images: bool = False
+    ) -> AnkiNotesResult:
         """Select notes needing work, then process selected note IDs."""
         selected_limit = self.default_limit if limit is None else limit
         if selected_limit is not None:
@@ -158,7 +160,12 @@ class AnkiNotesBatch:
                     image_config = self.config.get("services", {}).get("image_generator", {})
                     image_field = str(image_config.get("image_field", "Image"))
                     prompt = fields.get("ImagePrompt", "").strip()
-                    if image_field in fields and prompt and not fields.get(image_field, "").strip():
+                    if (
+                        not skip_images
+                        and image_field in fields
+                        and prompt
+                        and not fields.get(image_field, "").strip()
+                    ):
                         media_dir = Path(str(image_config.get("media_dir", "") or ".")).expanduser()
                         if not media_dir.is_absolute():
                             media_dir = (self.config_path.resolve().parent / media_dir).resolve()
@@ -269,12 +276,19 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Maximum selected notes needing work; overrides services.anki_notes.limit.",
     )
+    parser.add_argument(
+        "--skip-images",
+        action="store_true",
+        help="Skip image generation; still generate other missing fields and audio.",
+    )
     args = parser.parse_args(argv)
     try:
         config = json.loads(args.config.read_text(encoding="utf-8-sig"))
         if not isinstance(config, dict):
             raise ValueError("Config must be a JSON object.")
-        result = AnkiNotesBatch(config, args.config).process(limit=args.limit)
+        result = AnkiNotesBatch(config, args.config).process(
+            limit=args.limit, skip_images=args.skip_images
+        )
         print(
             f"Processed: {result.processed}; succeeded: {result.succeeded}; "
             f"failed: {result.failed}."

@@ -12,3 +12,4 @@ __pycache__/
 # Google credentials
 account_service.json
 google_sheets_token.json
+batch_logs/*.lock

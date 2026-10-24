@@ -52,10 +52,13 @@ Anki deck selects that deck.
 python spreadsheet_anki_creator.py --input spreadsheet_export.txt --dry-run
 python spreadsheet_anki_creator.py --input spreadsheet_export.txt --sync
 python spreadsheet_anki_creator.py --input "GOOGLE_SHEETS_URL" --skip-images --skip-tts
+python spreadsheet_anki_creator.py --input words.csv kanji.tsv "GOOGLE_SHEETS_URL" --dry-run
 ```
 
-Use `--spreadsheet-id ID` to read Sheets directly. `--credentials PATH`
-overrides the service-account JSON path. `--dry-run` checks rows and Anki
+`--input` accepts multiple CSV/TSV files and Google Sheets URLs; repeat
+`--input` or pass multiple sources after one flag. `--spreadsheet-id` also
+accepts multiple IDs. These source types can be mixed in one run.
+`--credentials PATH` overrides the service-account JSON path. `--dry-run` checks rows and Anki
 metadata without creating notes. `--skip-images` and `--skip-tts` disable those
 generators for that run.
 
@@ -64,13 +67,14 @@ generators for that run.
 Keep Anki and AnkiConnect server running, then run:
 
 ```bash
-python -m helpers.sync_ankiweb_to_local
+./anki_sync.sh
 ```
 
 This triggers Anki's normal sync through AnkiConnect. It is bidirectional;
 Anki decides whether to download, upload, or resolve conflicts. It does not
 force a download-only operation. Optional flags: `--config PATH` and
-`--timeout SECONDS` (default 1800; increase for large collections).
+`--timeout SECONDS` (default 1800; increase for large collections), for example
+`./anki_sync.sh --timeout 3600`.
 
 ## Sync Anki notes to PostgreSQL
 
@@ -94,6 +98,12 @@ Fill missing word fields, images, and audio:
 
 ```bash
 python -m batch.anki_notes --limit 10
+```
+
+Skip image creation while still filling other fields and audio:
+
+```bash
+python -m batch.anki_notes --skip-images
 ```
 
 Generate images for existing notes with blank `Image` and non-empty
