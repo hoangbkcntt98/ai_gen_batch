@@ -46,7 +46,7 @@ def upload_media(config: dict, config_path: Path, media_override: Path | None) -
         for path in directory.iterdir()
         if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS
     )
-    timeout = int(config.get("timeout_seconds", 120))
+    timeout = int(batch_config.get("timeout_seconds", config.get("timeout_seconds", 120)))
     for image_path in images:
         url = f"{base_url.rstrip('/')}/{quote(image_path.name)}"
         response = requests.put(

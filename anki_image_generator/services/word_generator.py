@@ -103,11 +103,16 @@ def _generate_schema_fields(
 ) -> None:
     schema = WORD_SCHEMA if identity == "Word" else KANJI_SCHEMA
     value = row.get(identity, "").strip()
-    source_language = str(config.get("source_language", "Japanese")).strip() or "Japanese"
+    settings = config.get("services", {}).get("word_generator", {})
+    source_language = str(
+        settings.get("source_language", config.get("source_language", "Japanese"))
+    ).strip() or "Japanese"
     destination_language = (
-        str(config.get("destination_language", "Vietnamese")).strip() or "Vietnamese"
+        str(settings.get(
+            "destination_language", config.get("destination_language", "Vietnamese")
+        )).strip() or "Vietnamese"
     )
-    user_level = str(config.get("user_level", "N3")).strip().upper()
+    user_level = str(settings.get("user_level", config.get("user_level", "N3"))).strip().upper()
     if user_level not in {"N1", "N2", "N3", "N4", "N5"}:
         user_level = "N3"
     required_vocabulary = (
@@ -216,8 +221,12 @@ def generate_missing_fields(row, fields, model_fields, config):
             raise RuntimeError(
                 "Configure services.word_generator.chat_api_base and chat_model in config.json."
             )
-        source_language = str(config.get("source_language", "Japanese")).strip()
-        destination_language = str(config.get("destination_language", "Vietnamese")).strip()
+        source_language = str(batch_config.get(
+            "source_language", config.get("source_language", "Japanese")
+        )).strip()
+        destination_language = str(batch_config.get(
+            "destination_language", config.get("destination_language", "Vietnamese")
+        )).strip()
         descriptions = {
             "Reading": "Japanese kana reading",
             "MeaningSource": f"concise meaning in {source_language}",

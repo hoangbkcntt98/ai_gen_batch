@@ -12,15 +12,15 @@
   "pgsql_ssl_mode": "disable",
   "pgsql_ssl_ca": "",
   "pgsql_connect_timeout": 15,
-  "image_field": "Image",
-  "skip_existing_image": false,
-  "timeout_seconds": 240,
   "services": {
     "image_generator": {
       "image_api_base": "http://localhost:18610/v1",
       "image_api_key": "YOUR_IMAGE_API_KEY",
       "image_model": "muse-image-1.0",
       "image_size": "1024x1024",
+      "image_field": "Image",
+      "skip_existing_image": false,
+      "timeout_seconds": 240,
       "limit": null,
       "job_type": "image_generate",
       "clean_error": true,
@@ -38,6 +38,9 @@
       "chat_api_base": "YOUR_CHAT_API_BASE",
       "chat_api_key": "YOUR_CHAT_API_KEY",
       "chat_model": "YOUR_CHAT_MODEL",
+      "source_language": "Japanese",
+      "destination_language": "Vietnamese",
+      "user_level": "N3",
       "temperature": 0.2,
       "timeout_seconds": 120
     },

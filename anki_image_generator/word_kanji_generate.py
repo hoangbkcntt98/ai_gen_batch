@@ -85,7 +85,8 @@ def connect_pgsql(config: dict[str, Any]) -> Any:
 
 
 def prompt_for(mode: str, source: str, required_vocabulary: str, config: dict[str, Any]) -> str:
-    level = str(config.get("user_level", "N3")).upper()
+    settings = config.get("services", {}).get("word_generator", {})
+    level = str(settings.get("user_level", config.get("user_level", "N3"))).upper()
     if level not in {"N1", "N2", "N3", "N4", "N5"}:
         level = "N3"
     if mode == "kanji":
@@ -102,8 +103,12 @@ def prompt_for(mode: str, source: str, required_vocabulary: str, config: dict[st
             "2D Japanese everyday-life illustration of RequiredVocabulary and its meaning, "
             "pastel colors, no text or watermark."
         )
-    source_language = str(config.get("source_language", "Japanese")).strip()
-    destination_language = str(config.get("destination_language", "Vietnamese")).strip()
+    source_language = str(
+        settings.get("source_language", config.get("source_language", "Japanese"))
+    ).strip()
+    destination_language = str(
+        settings.get("destination_language", config.get("destination_language", "Vietnamese"))
+    ).strip()
     return (
         f"Create one accurate vocabulary learning note for {source!r}. "
         f"Source language: {source_language}; destination language: {destination_language}; "

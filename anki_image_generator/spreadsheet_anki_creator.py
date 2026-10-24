@@ -174,7 +174,9 @@ def create_notes(
             except Exception as err:
                 result.failures.append(f"{sheet} row {row_number}: TTS: {err}")
 
-            image_field = str(config.get("image_field", "Image"))
+            image_field = str(config.get("services", {}).get(
+                "image_generator", {}
+            ).get("image_field", config.get("image_field", "Image")))
             prompt = draft.fields.get("ImagePrompt", "").strip()
             if image_field in model_fields and prompt and not draft.fields.get(image_field, "").strip():
                 try:
