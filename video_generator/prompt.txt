@@ -1,0 +1,5 @@
+2D anime educational video for Japanese JLPT N1 grammar pattern {pattern}. 
+Clearly act out this exact example in a natural, easy-to-understand context: {example_ja}. Meaning for the learner: {example_vi}. Context note: {note}. 
+Use expressive anime characters, a clear beginning-middle-end visual story, smooth camera movement, warm cinematic lighting, vertical social-media composition, no logos, no watermark. 
+Show the Japanese example as a clean subtitle: {example_ja}. 
+Add Japanese voiceover reading only this exact Japanese sentence: {example_ja}. Do not speak, narrate, or include any Vietnamese voiceover; the Vietnamese meaning and context note are visual guidance only and must not be read aloud.

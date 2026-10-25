@@ -1,0 +1,39 @@
+{
+  "base_url": "https://your-muse2api-host/v1",
+  "api_key": "YOUR_MUSE2API_API_KEY",
+  "database_url": "postgresql://USER:PASSWORD@HOST:5432/app_suite_db",
+  "image_model": "muse-image-1.0",
+  "default_image_prompt": "Describe image prompt here",
+  "default_video_prompt": "Describe video prompt here",
+  "video_duration": 5,
+  "poll_interval": 5,
+  "grammar_video_batch": {
+    "media_dir": "/path/to/muse2api/data/media",
+    "output_dir": "/path/to/grammar-example-videos",
+    "duration": 10,
+    "size": "9:16",
+    "task_poll_interval_seconds": 10,
+    "task_timeout_seconds": 600,
+    "media_wait_seconds": 600,
+    "media_poll_interval_seconds": 2,
+    "http_connect_timeout_seconds": 15,
+    "http_read_timeout_seconds": 60,
+    "retry_delay_minutes": 5,
+    "database_name": "app_suite_db",
+    "schema": "openclaw",
+    "patterns_table": "grammar_patterns",
+    "examples_table": "grammar_examples",
+    "videos_table": "grammar_example_videos",
+    "advisory_lock_namespace": 1196573265,
+    "advisory_lock_id": 1
+  },
+  "google_drive": {
+    "folder_id": "YOUR_GOOGLE_DRIVE_FOLDER_ID",
+    "auth_type": "oauth",
+    "oauth_client_file": "client.json",
+    "token_file": "token.json",
+    "service_account_file": "account_service.json",
+    "upload_folder": "/path/to/folder",
+    "upload_files": []
+  }
+}

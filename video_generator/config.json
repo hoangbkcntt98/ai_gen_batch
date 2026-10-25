@@ -1,9 +1,37 @@
 ﻿{
   "base_url": "http://100.103.240.83:18610/v1",
   "api_key": "Hoangdo@123",
+  "database_url": "",
   "image_model": "muse-image-1.0",
-  "default_image_prompt": "Một chú chó Shiba Inu đội mũ phi hành gia",
-  "default_video_prompt": "Kitten walking",
   "video_duration": 5,
-  "poll_interval": 5
+  "poll_interval": 5,
+  "grammar_video_batch": {
+    "media_dir": "/home/ubuntu/muse2api/data/media",
+    "output_dir": "/mnt/openclaw-data/openclaw/grammar-example-videos",
+    "duration": 10,
+    "size": "9:16",
+    "task_poll_interval_seconds": 10,
+    "task_timeout_seconds": 600,
+    "media_wait_seconds": 600,
+    "media_poll_interval_seconds": 2,
+    "http_connect_timeout_seconds": 15,
+    "http_read_timeout_seconds": 60,
+    "retry_delay_minutes": 5,
+    "database_name": "app_suite_db",
+    "schema": "openclaw",
+    "patterns_table": "grammar_patterns",
+    "examples_table": "grammar_examples",
+    "videos_table": "grammar_example_videos",
+    "advisory_lock_namespace": 1196573265,
+    "advisory_lock_id": 1
+  },
+  "google_drive": {
+    "folder_id": "1NnI38xU3faxFVs0glYYtU6N1MUpaYk4V",
+    "auth_type": "oauth",
+    "oauth_client_file": "client.json",
+    "token_file": "token.json",
+    "service_account_file": "account_service.json",
+    "upload_folder": "/mnt/openclaw-data/openclaw/grammar-example-videos",
+    "upload_files": []
+  }
 }
