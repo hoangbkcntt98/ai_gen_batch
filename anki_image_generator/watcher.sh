@@ -9,9 +9,11 @@ usage() {
   cat <<'EOF'
 Usage:
   ./watcher.sh start FILE.py [--interval 60s] [PYTHON_SCRIPT_ARGS...]
+  ./watcher.sh start --config [config.json]
   ./watcher.sh status FILE.py
   ./watcher.sh pid FILE.py
   ./watcher.sh stop FILE.py
+  ./watcher.sh --stop FILE.py|all
   ./watcher.sh --dashboard
 
 Intervals accept seconds (60, 60s), minutes (5m), or hours (1h).
@@ -208,19 +210,128 @@ if [[ "${1:-}" == "--dashboard" ]]; then
   exit 0
 fi
 
+if [[ "${1:-}" == "start" && "${2:-}" == "--config" ]]; then
+  config_path="${3:-$SCRIPT_DIR/config.json}"
+  [[ "$config_path" == /* ]] || config_path="$SCRIPT_DIR/$config_path"
+  if [[ ! -f "$config_path" ]]; then
+    echo "Config file not found: $config_path" >&2
+    exit 2
+  fi
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "python3 is required to read watcher config." >&2
+    exit 1
+  fi
+  if ! python3 - "$config_path" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as config_file:
+        jobs = json.load(config_file).get("services", {}).get("watcher", {}).get("jobs", [])
+    if not isinstance(jobs, list):
+        raise ValueError("services.watcher.jobs must be an array")
+    for job in jobs:
+        if not isinstance(job, dict) or not isinstance(job.get("script"), str):
+            raise ValueError("each watcher job needs a string 'script'")
+        if not isinstance(job.get("args", []), list) or not all(
+            isinstance(arg, str) for arg in job.get("args", [])
+        ):
+            raise ValueError("'args' must be an array of strings")
+        if not isinstance(job.get("interval", "30m"), str):
+            raise ValueError("'interval' must be a string")
+except (OSError, json.JSONDecodeError, AttributeError, ValueError) as error:
+    print(f"Invalid watcher config: {error}", file=sys.stderr)
+    sys.exit(2)
+PY
+  then
+    exit 2
+  fi
+  jobs=()
+  mapfile -d '' -t jobs < <(python3 - "$config_path" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as config_file:
+    jobs = json.load(config_file).get("services", {}).get("watcher", {}).get("jobs", [])
+for job in jobs:
+    args = job.get("args", [])
+    values = [job["script"], job.get("interval", "30m"), str(len(args)), *args]
+    sys.stdout.buffer.write(b"\0".join(v.encode() for v in values) + b"\0")
+PY
+  if ((${#jobs[@]} == 0)); then
+    echo "No watcher jobs configured in $config_path."
+    exit 0
+  fi
+  job_index=0
+  started=0
+  while ((job_index < ${#jobs[@]})); do
+    script="${jobs[$job_index]}"
+    interval="${jobs[$((job_index + 1))]}"
+    arg_count="${jobs[$((job_index + 2))]}"
+    job_index=$((job_index + 3))
+    script_args=()
+    for ((arg_index = 0; arg_index < arg_count; arg_index++)); do
+      script_args+=("${jobs[$job_index]}")
+      job_index=$((job_index + 1))
+    done
+    if "$SELF" start "$script" --interval "$interval" -- "${script_args[@]}"; then
+      started=$((started + 1))
+    else
+      echo "Failed to start configured watcher: $script" >&2
+    fi
+  done
+  ((started > 0))
+  exit $?
+fi
+
 if [[ "${1:-}" == "start" ]]; then
   shift
-elif [[ "${1:-}" == "status" || "${1:-}" == "pid" || "${1:-}" == "stop" ]]; then
+elif [[ "${1:-}" == "status" || "${1:-}" == "pid" || "${1:-}" == "stop" || "${1:-}" == "--stop" ]]; then
   action="$1"
   target="${2:-}"
   if [[ -z "$target" ]]; then
     usage >&2
     exit 2
   fi
+  stop_one() {
+    local target_name="$1" target_pid_file="$2"
+    local target_pid
+    if [[ ! -f "$target_pid_file" ]]; then
+      echo "Watcher not running for $target_name."
+      return 1
+    fi
+    IFS= read -r target_pid <"$target_pid_file" || target_pid=""
+    if ! pid_is_watcher "$target_pid"; then
+      rm -f -- "$target_pid_file"
+      echo "Removed stale PID file: $target_pid_file"
+      return 1
+    fi
+    kill -TERM "$target_pid"
+    echo "Stopped watcher for $target_name: PID $target_pid"
+  }
+  if [[ "$action" == "--stop" && "$target" == "all" ]]; then
+    shopt -s nullglob
+    pid_files=("$LOG_DIR"/*.watcher.pid)
+    if ((${#pid_files[@]} == 0)); then
+      echo "No watcher PID files found."
+      exit 0
+    fi
+    stop_failures=0
+    for pid_file in "${pid_files[@]}"; do
+      name="$(basename -- "$pid_file" .watcher.pid)"
+      stop_one "$name" "$pid_file" || stop_failures=$((stop_failures + 1))
+    done
+    ((stop_failures == 0))
+    exit $?
+  fi
   name="$(safe_name "$target")"
   pid_file="$LOG_DIR/${name}.watcher.pid"
   python_pid_file="$LOG_DIR/${name}.python.pid"
   lock_file="$LOG_DIR/${name}.lock"
+  if [[ "$action" == "stop" || "$action" == "--stop" ]]; then
+    stop_one "$target" "$pid_file"
+    exit $?
+  fi
   if [[ ! -f "$pid_file" ]]; then
     echo "Watcher not running for $target."
     exit 1
@@ -253,9 +364,6 @@ elif [[ "${1:-}" == "status" || "${1:-}" == "pid" || "${1:-}" == "stop" ]]; then
     echo "Lock file: $lock_file"
     exit 0
   fi
-  kill -TERM "$pid"
-  echo "Stopped watcher for $target: PID $pid"
-  exit 0
 fi
 
 if [[ $# -lt 1 ]]; then

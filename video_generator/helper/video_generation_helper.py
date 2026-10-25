@@ -2,7 +2,6 @@
 
 import logging
 import os
-import re
 import shutil
 import time
 from datetime import datetime
@@ -22,7 +21,10 @@ def normalize_api_root(base_url):
 
 
 def safe_filename_part(value):
-    value = re.sub(r"[^A-Za-z0-9._-]+", "_", str(value)).strip("._")
+    value = "".join(
+        char if char.isalnum() or char in "._-" else "_"
+        for char in str(value)
+    ).strip("._")
     return value or "pattern"
 
 
@@ -131,18 +133,54 @@ def wait_for_media(filename, media_dir, timeout, poll_interval):
     raise TimeoutError(f"Media file did not appear: {source}")
 
 
-def copy_media(source, output_root, item, run_date=None):
+def copy_media(source, output_root, item, run_date=None, delete_source=False):
+    source = Path(source)
     output_root = Path(output_root)
     output_root.mkdir(parents=True, exist_ok=True)
-    run_date = run_date or datetime.now().strftime("%Y%m%d")
+    run_date = run_date or datetime.now().strftime("%y%m%d")
     basename = (
         f"{safe_filename_part(item['pattern_id'])}_"
-        f"{safe_filename_part(item['pattern'])}_example1_{run_date}.mp4"
+        f"{safe_filename_part(item['pattern'])}_{run_date}.mp4"
     )
     destination = output_root / basename
     temporary = destination.with_name(destination.name + ".tmp")
     try:
         shutil.copy2(source, temporary)
+        os.replace(temporary, destination)
+        if delete_source and source.resolve() != destination.resolve():
+            source.unlink()
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+    return destination
+
+
+def download_media(session, raw_url, api_root, output_root, item, request_timeout):
+    media_url = normalize_media_url(raw_url, api_root)
+    if not media_url:
+        raise RuntimeError("Completed task has no media URL and media_dir is unset")
+    output_root = Path(output_root)
+    output_root.mkdir(parents=True, exist_ok=True)
+    run_date = datetime.now().strftime("%y%m%d")
+    basename = (
+        f"{safe_filename_part(item['pattern_id'])}_"
+        f"{safe_filename_part(item['pattern'])}_{run_date}.mp4"
+    )
+    destination = output_root / basename
+    temporary = destination.with_name(destination.name + ".tmp")
+    try:
+        with session.get(
+            media_url, timeout=request_timeout, stream=True
+        ) as response:
+            if not response.ok:
+                raise RuntimeError(
+                    f"MUSE2API media download failed ({response.status_code}): "
+                    f"{response_error(response)}"
+                )
+            with temporary.open("wb") as output_file:
+                for chunk in response.iter_content(chunk_size=1024 * 1024):
+                    if chunk:
+                        output_file.write(chunk)
         os.replace(temporary, destination)
     finally:
         if temporary.exists():
@@ -164,6 +202,7 @@ def generate_video(
     media_wait_timeout,
     media_poll_interval,
     request_timeout,
+    delete_source_after_copy,
     on_task_created=None,
 ):
     """Generate video, wait for local media, copy it, and return result metadata."""
@@ -184,12 +223,21 @@ def generate_video(
             task_timeout,
             request_timeout,
         )
-
-    filename, raw_url = extract_video_result(payload)
-    source = wait_for_media(
-        filename, media_dir, media_wait_timeout, media_poll_interval
-    )
-    destination = copy_media(source, output_root, item)
+        filename, raw_url = extract_video_result(payload)
+        if media_dir:
+            source = wait_for_media(
+                filename, media_dir, media_wait_timeout, media_poll_interval
+            )
+            destination = copy_media(
+                source,
+                output_root,
+                item,
+                delete_source=delete_source_after_copy,
+            )
+        else:
+            destination = download_media(
+                session, raw_url, api_root, output_root, item, request_timeout
+            )
     return {
         "task_id": task_id,
         "video_url": normalize_media_url(raw_url, api_root),

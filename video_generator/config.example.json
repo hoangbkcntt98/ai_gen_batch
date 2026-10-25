@@ -10,6 +10,8 @@
   "grammar_video_batch": {
     "media_dir": "/path/to/muse2api/data/media",
     "output_dir": "/path/to/grammar-example-videos",
+    "delete_source_after_copy": true,
+    "upload_to_google_drive": false,
     "duration": 10,
     "size": "9:16",
     "task_poll_interval_seconds": 10,

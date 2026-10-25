@@ -35,7 +35,15 @@ python grammar_example_video_batch.py
 ```
 
 Batch output goes to `grammar_video_batch.output_dir`; filenames include run
-date (`{pattern_id}_{pattern}_example1_YYYYMMDD.mp4`).
+date (`{pattern_id}_{pattern}_YYMMDD.mp4`) and preserve Japanese pattern names.
+When `grammar_video_batch.media_dir` has a path, batch copies local media from
+that directory. Set it to an empty string or remove it to download from the
+completed task's result URL. `delete_source_after_copy` controls deletion of
+local media after successful copy. Set
+`grammar_video_batch.upload_to_google_drive` to `true` to upload each completed
+video to `google_drive.folder_id`; set it to `false` to disable upload. Drive
+upload failures are logged separately and do not cause video regeneration.
+OAuth uses configured `client.json` and reuses `token.json` after first sign-in.
 
 ## Upload files or a folder to Google Drive
 

@@ -61,6 +61,20 @@
       "limit": null,
       "sync_before_processing": false,
       "sync_after_processing": false
+    },
+    "watcher": {
+      "jobs": [
+        {
+          "script": "batch/anki_notes.py",
+          "interval": "5m",
+          "args": ["--skip-images", "--skip-sync"]
+        },
+        {
+          "script": "batch/images.py",
+          "interval": "5m",
+          "args": ["--skip-sync"]
+        }
+      ]
     }
   },
   "anki_import": {

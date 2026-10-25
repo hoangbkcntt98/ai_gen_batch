@@ -1,13 +1,17 @@
 ﻿{
   "base_url": "http://100.103.240.83:18610/v1",
   "api_key": "Hoangdo@123",
-  "database_url": "",
+  "database_url": "postgresql://hoangdo:Hoangdo%40123@100.103.240.83:5432/app_suite_db",
   "image_model": "muse-image-1.0",
+  "default_image_prompt": "Describe image prompt here",
+  "default_video_prompt": "Describe video prompt here",
   "video_duration": 5,
   "poll_interval": 5,
   "grammar_video_batch": {
     "media_dir": "/home/ubuntu/muse2api/data/media",
     "output_dir": "/mnt/openclaw-data/openclaw/grammar-example-videos",
+    "delete_source_after_copy": true,
+    "upload_to_google_drive": true,
     "duration": 10,
     "size": "9:16",
     "task_poll_interval_seconds": 10,

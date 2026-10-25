@@ -23,10 +23,12 @@ import sys
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
+from helper.google_drive_helper import upload_to_google_drive
 from helper.video_generation_helper import generate_video, normalize_api_root
 
 
 CONFIG_FILE = Path(__file__).with_name("config.json")
+PROJECT_DIR = CONFIG_FILE.parent
 DATABASE_NAME = None
 SCHEMA = None
 PATTERNS_TABLE = None
@@ -38,6 +40,7 @@ RETRY_DELAY = None
 ADVISORY_LOCK_NAMESPACE = None
 ADVISORY_LOCK_ID = None
 BATCH_CONFIG = None
+VIDEO_ID_TYPES = {}
 
 LOGGER = logging.getLogger("grammar_example_video_batch")
 
@@ -60,8 +63,8 @@ def load_config():
     if not isinstance(batch, dict):
         raise ValueError("config.json must define a grammar_video_batch object")
     required = (
-        "media_dir",
         "output_dir",
+        "delete_source_after_copy",
         "duration",
         "size",
         "task_poll_interval_seconds",
@@ -84,17 +87,23 @@ def load_config():
         raise ValueError(
             "Missing grammar_video_batch config values: " + ", ".join(missing)
         )
+    if not isinstance(batch.get("upload_to_google_drive", False), bool):
+        raise ValueError(
+            "grammar_video_batch.upload_to_google_drive must be true or false"
+        )
 
     global DATABASE_NAME, SCHEMA, PATTERNS_TABLE, EXAMPLES_TABLE, TABLE
     global MEDIA_DIR, OUTPUT_ROOT, RETRY_DELAY
     global ADVISORY_LOCK_NAMESPACE, ADVISORY_LOCK_ID, BATCH_CONFIG
+    global VIDEO_ID_TYPES
     BATCH_CONFIG = batch
     DATABASE_NAME = batch["database_name"]
     SCHEMA = batch["schema"]
     PATTERNS_TABLE = batch["patterns_table"]
     EXAMPLES_TABLE = batch["examples_table"]
     TABLE = batch["videos_table"]
-    MEDIA_DIR = Path(batch["media_dir"])
+    media_dir = batch.get("media_dir")
+    MEDIA_DIR = Path(media_dir) if media_dir else None
     OUTPUT_ROOT = Path(batch["output_dir"])
     RETRY_DELAY = f"{batch['retry_delay_minutes']} minutes"
     ADVISORY_LOCK_NAMESPACE = batch["advisory_lock_namespace"]
@@ -138,6 +147,7 @@ def connect_database(database_url):
 
 
 def ensure_table(connection, create=True):
+    global VIDEO_ID_TYPES
     with connection.cursor() as cursor:
         if create:
             cursor.execute(f"CREATE SCHEMA IF NOT EXISTS {SCHEMA}")
@@ -231,6 +241,17 @@ def ensure_table(connection, create=True):
                 (SCHEMA, PATTERNS_TABLE),
             )
             note_expression = "COALESCE(p.note, '')" if cursor.fetchone()[0] else "''"
+        cursor.execute(
+            """
+            SELECT column_name, data_type
+            FROM information_schema.columns
+            WHERE table_schema = %s
+              AND table_name = %s
+              AND column_name IN ('pattern_id', 'example_id')
+            """,
+            (SCHEMA, TABLE),
+        )
+        VIDEO_ID_TYPES = dict(cursor.fetchall())
     connection.commit()
     return note_expression, table_exists
 
@@ -253,14 +274,14 @@ def select_candidate(connection, note_expression, table_exists=True):
               NOT EXISTS (
                   SELECT 1
                   FROM {SCHEMA}.{TABLE} AS v
-                  WHERE v.pattern_id = p.id::text
-                    AND v.example_id = e.id::text
+                  WHERE v.pattern_id::text = p.id::text
+                    AND v.example_id::text = e.id::text
               )
               OR EXISTS (
                   SELECT 1
                   FROM {SCHEMA}.{TABLE} AS v
-                  WHERE v.pattern_id = p.id::text
-                    AND v.example_id = e.id::text
+                  WHERE v.pattern_id::text = p.id::text
+                    AND v.example_id::text = e.id::text
                     AND v.status = 'failed'
                     AND v.updated_at <= NOW() - INTERVAL '{RETRY_DELAY}'
               )
@@ -268,8 +289,8 @@ def select_candidate(connection, note_expression, table_exists=True):
           AND NOT EXISTS (
               SELECT 1
               FROM {SCHEMA}.{TABLE} AS v
-              WHERE v.pattern_id = p.id::text
-                AND v.example_id = e.id::text
+              WHERE v.pattern_id::text = p.id::text
+                AND v.example_id::text = e.id::text
                 AND v.status IN ('completed', 'processing')
           )
         """
@@ -277,9 +298,9 @@ def select_candidate(connection, note_expression, table_exists=True):
         eligibility = ""
     query = f"""
         SELECT
-            p.id::text AS pattern_id,
+            p.id AS pattern_id,
             p.pattern::text AS pattern,
-            e.id::text AS example_id,
+            e.id AS example_id,
             e.example_ja::text AS example_ja,
             COALESCE(e.example_vi::text, '') AS example_vi,
             {note_expression}::text AS note
@@ -299,6 +320,11 @@ def select_candidate(connection, note_expression, table_exists=True):
         return None
     fields = ("pattern_id", "pattern", "example_id", "example_ja", "example_vi", "note")
     item = dict(zip(fields, row))
+    for column in ("pattern_id", "example_id"):
+        if VIDEO_ID_TYPES.get(column) in {"smallint", "integer", "bigint"}:
+            item[column] = int(item[column])
+        elif VIDEO_ID_TYPES.get(column) in {"text", "character varying", "character"}:
+            item[column] = str(item[column])
     item["pattern"] = item["pattern"] or ""
     item["example_ja"] = item["example_ja"] or ""
     item["example_vi"] = item["example_vi"] or ""
@@ -359,14 +385,39 @@ def update_status(connection, item, status, **values):
             f"""
             UPDATE {SCHEMA}.{TABLE}
             SET {", ".join(assignments)}
-            WHERE pattern_id = %s AND example_id = %s
+            WHERE pattern_id::text = %s::text
+              AND example_id::text = %s::text
             """,
-            params,
+            [*params[:-2], str(params[-2]), str(params[-1])],
         )
     connection.commit()
 
 
-def process_item(connection, item, api_root, api_key):
+def resolve_project_path(configured_path):
+    path = Path(configured_path).expanduser()
+    return path if path.is_absolute() else PROJECT_DIR / path
+
+def upload_video_to_drive(result, drive_config):
+    folder_id = drive_config.get("folder_id")
+    if not folder_id:
+        raise ValueError("Set google_drive.folder_id in config.json")
+
+    return upload_to_google_drive(
+        result["local_path"],
+        folder_id,
+        resolve_project_path(
+            drive_config.get("service_account_file", "account_service.json")
+        ),
+        auth_type=drive_config.get("auth_type", "oauth"),
+        oauth_client_file=resolve_project_path(
+            drive_config.get("oauth_client_file", "client.json")
+        ),
+        token_file=resolve_project_path(
+            drive_config.get("token_file", "token.json")
+        ),
+    )
+
+def process_item(connection, item, api_root, api_key, drive_config):
     prompt = make_video_prompt(
         item["pattern"],
         item["example_ja"],
@@ -418,6 +469,7 @@ def process_item(connection, item, api_root, api_key):
                 BATCH_CONFIG["http_connect_timeout_seconds"],
                 BATCH_CONFIG["http_read_timeout_seconds"],
             ),
+            delete_source_after_copy=BATCH_CONFIG["delete_source_after_copy"],
             on_task_created=record_task,
         )
         update_status(
@@ -439,6 +491,34 @@ def process_item(connection, item, api_root, api_key):
             task_id,
             result["local_path"],
         )
+        if BATCH_CONFIG.get("upload_to_google_drive", False):
+            try:
+                uploaded = upload_video_to_drive(result, drive_config)
+                LOGGER.info(
+                    "pattern_id=%s example_id=%s task_id=%s "
+                    "drive_status=uploaded drive_file_id=%s drive_name=%s "
+                    "drive_url=%s",
+                    item["pattern_id"],
+                    item["example_id"],
+                    task_id,
+                    uploaded.get("id"),
+                    uploaded.get("name"),
+                    uploaded.get("webViewLink"),
+                )
+            except Exception:
+                LOGGER.exception(
+                    "pattern_id=%s example_id=%s task_id=%s "
+                    "drive_status=failed; video remains completed",
+                    item["pattern_id"],
+                    item["example_id"],
+                    task_id,
+                )
+        else:
+            LOGGER.info(
+                "pattern_id=%s example_id=%s drive_status=skipped reason=disabled",
+                item["pattern_id"],
+                item["example_id"],
+            )
         return True
     except Exception as exc:
         error = f"{type(exc).__name__}: {exc}"
@@ -525,7 +605,13 @@ def main():
             connection.rollback()
             return 0
 
-        process_item(connection, item, api_root, api_key)
+        process_item(
+            connection,
+            item,
+            api_root,
+            api_key,
+            config.get("google_drive", {}),
+        )
         return 0
     except Exception:
         LOGGER.exception("Batch failed")
@@ -534,6 +620,7 @@ def main():
         if connection is not None:
             if lock_acquired:
                 try:
+                    connection.rollback()
                     with connection.cursor() as cursor:
                         cursor.execute(
                             "SELECT pg_advisory_unlock(%s, %s)",

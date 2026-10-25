@@ -123,15 +123,43 @@ syncs Anki before scanning and after each chunk.
 ## Watcher
 
 Run a Python job repeatedly. Default interval is 30 minutes; pass script options
-after watcher options:
+after watcher options. Configure multiple jobs under `services.watcher.jobs` in
+`config.json`, then start them together:
+
+```json
+"watcher": {
+  "jobs": [
+    {
+      "script": "batch/anki_notes.py",
+      "interval": "5m",
+      "args": ["--skip-images", "--skip-sync"]
+    }
+  ]
+}
+```
+
+`script` paths are relative to the project directory. `args` is an array of
+strings passed unchanged to Python. `interval` accepts seconds, minutes, or
+hours; omitted interval defaults to `30m`.
+
+```bash
+./watcher.sh start --config
+```
+
+Pass another config path with `./watcher.sh start --config path/to/config.json`.
+Manual one-off starts remain supported:
 
 ```bash
 ./watcher.sh start batch/images.py --limit 100 --step 10
 ./watcher.sh status batch/images.py
 ./watcher.sh pid batch/images.py
 ./watcher.sh stop batch/images.py
+./watcher.sh --stop batch/images.py
+./watcher.sh --stop all
 ./watcher.sh --dashboard
 ```
+
+`--stop FILE.py` stops one watcher; `--stop all` stops every active watcher.
 
 Override interval with `--interval`, for example `--interval 60s` or
 `--interval 5m`. Python output goes to `batch_logs/{name}.log`; watcher events
